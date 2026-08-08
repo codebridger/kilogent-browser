@@ -5,6 +5,7 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { randomUUID, timingSafeEqual } from "crypto";
 import type { FromExtension, ToolResult } from "./protocol.js";
+import { parseFromExtension } from "./protocol.js";
 
 const HEARTBEAT_MS = 20_000; // < MV3's 30s idle window, so inbound frames keep the SW resident
 const HELLO_TIMEOUT_MS = 5_000;
@@ -143,12 +144,19 @@ export class ExtensionHub {
     }, HELLO_TIMEOUT_MS);
 
     ws.on("message", (data) => {
-      let msg: FromExtension;
+      // VALIDATED, not cast. These frames arrive over a face that is published with no Cloudflare
+      // Access policy in front of it (a browser WebSocket cannot send the headers Access needs),
+      // so the in-band token is the only gate and everything after it used to be unexamined.
+      // A frame that is not something the extension may say is DROPPED rather than thrown on:
+      // the socket is authenticated by now, and killing it would take every in-flight command
+      // with it over what is far more likely to be a version skew.
+      let msg: FromExtension | null;
       try {
-        msg = JSON.parse(data.toString());
+        msg = parseFromExtension(JSON.parse(data.toString()));
       } catch {
-        return; // ignore malformed frames
+        return; // not JSON at all
       }
+      if (msg === null) return;
 
       if (!authed) {
         if (msg.t === "hello" && typeof msg.token === "string" && tokenEquals(msg.token, this.token)) {

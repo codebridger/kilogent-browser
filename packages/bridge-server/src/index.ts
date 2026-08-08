@@ -1,12 +1,18 @@
 #!/usr/bin/env node
-// Bridge-server: runs on the VM. Two listeners in one process:
-//   • MCP face  (http://localhost:MCP_PORT/mcp) — the VM's Claude Code and the
-//     packages/agent test harness connect here as MCP clients. Stateless
-//     Streamable HTTP, same pattern as packages/daemon. NOT exposed publicly.
+// Bridge-server: runs on the VM. Two listeners in one process, each authenticating a DIFFERENT
+// party with a DIFFERENT secret:
+//   • MCP face  (http://BIND_HOST:MCP_PORT/mcp) — an agent connects here as an MCP client.
+//     Session-based Streamable HTTP: every call is routed to the tab group its MCP session owns.
+//     Requires `Authorization: Bearer $BRIDGE_MCP_TOKEN`. Binds to loopback unless you say
+//     otherwise, but the token — not the bind — is what defends it.
 //   • WS  face  (ws://0.0.0.0:WS_PORT)          — the MV3 extension dials in here.
-//     Exposed publicly by `cloudflared` on the VM (wss://…), guarded by our own
-//     token handshake (no Cloudflare Access — a browser WebSocket can't send the
-//     CF-Access-* headers Access needs).
+//     Exposed publicly by `cloudflared` on the VM (wss://…), guarded by our own in-band
+//     $BRIDGE_ACCESS_TOKEN handshake (no Cloudflare Access — a browser WebSocket can't send the
+//     CF-Access-* headers Access needs), with every later frame schema-validated in protocol.ts.
+//
+// The two tokens must differ, and the process refuses to start if they do not: one is typed into
+// a popup on somebody's laptop and the other pasted into an agent config, so they leak through
+// different accidents.
 //
 // A browser MCP tool call is forwarded over the WS to the extension, which
 // executes it via chrome.debugger and returns an MCP-shaped result.
@@ -204,13 +210,25 @@ app.all("/mcp", async (req, res) => {
     return;
   }
 
-  // Back-compat: a header-less, non-initialize call (e.g. a bare stateless client)
-  // runs as a one-shot on the extension's "default" session.
-  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-  res.on("close", () => transport.close());
-  const srv = buildServer(() => undefined);
-  await srv.connect(transport);
-  await transport.handleRequest(req, res, req.body);
+  // A header-less, non-initialize call used to run as a one-shot on the extension's "default"
+  // session. That branch is GONE, and its removal is a security change rather than tidying:
+  // everything this bridge does per caller — tab ownership, the session's tab group, teardown on
+  // disconnect — is keyed on the MCP session id, so the one path that had no session was also the
+  // one path that had none of those. Anything built on top of sessions later would be opt-out by
+  // simply omitting a header.
+  //
+  // Refused with a sentence rather than a bare 400, because the operator hitting this is holding a
+  // client that never sent `initialize`, and "Bad Request" does not tell them that.
+  res.status(400).json({
+    jsonrpc: "2.0",
+    error: {
+      code: -32600,
+      message:
+        "Expected an MCP `initialize` request, or an `Mcp-Session-Id` header naming a live session. " +
+        "This bridge is session-based: every call is routed to the tab group that session owns.",
+    },
+    id: null,
+  });
 });
 
 app.listen(MCP_PORT, BIND_HOST, () => {
@@ -221,6 +239,10 @@ app.listen(MCP_PORT, BIND_HOST, () => {
 });
 
 // ── WS face (public via cloudflared) ─────────────────────────────────────────
-const wss = new WebSocketServer({ port: WS_PORT });
+// `maxPayload` bounds ONE frame; protocol.ts bounds what a well-formed frame may contain. Both are
+// needed: without this, a single 500 MB text frame is buffered before any schema ever sees it, on a
+// box chosen for being cheap. `perMessageDeflate` stays off so a small compressed frame cannot
+// expand into a large one after the cap has already been checked.
+const wss = new WebSocketServer({ port: WS_PORT, maxPayload: 12 * 1024 * 1024, perMessageDeflate: false });
 hub.attach(wss);
 console.log(`Remote Browser Bridge — WS face on ws://0.0.0.0:${WS_PORT} (extension dials in here)`);
