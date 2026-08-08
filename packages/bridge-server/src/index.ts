@@ -18,16 +18,55 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { isInitializeRequest, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { ExtensionHub } from "./extension-hub.js";
+import { requireBearer } from "./auth.js";
 import { BROWSER_TOOLS } from "./tools.js";
 
 const MCP_PORT = parseInt(process.env.MCP_PORT ?? "3000");
 const WS_PORT = parseInt(process.env.WS_PORT ?? "3002");
 const TOKEN = process.env.BRIDGE_ACCESS_TOKEN ?? "";
+const MCP_TOKEN = process.env.BRIDGE_MCP_TOKEN ?? "";
+
+/**
+ * Which interface the MCP face binds to. Loopback unless somebody says otherwise.
+ *
+ * A variable rather than a hardcoded "127.0.0.1" so that exposing this face is a DELIBERATE act
+ * with a name, instead of something that happens implicitly the day a tunnel gains an ingress rule.
+ * The token below is what actually protects it; this only decides who can knock.
+ */
+const BIND_HOST = process.env.BRIDGE_BIND_HOST ?? "127.0.0.1";
 
 if (!TOKEN) {
   console.error(
     "FATAL: BRIDGE_ACCESS_TOKEN is not set. The extension authenticates with this token; " +
       "refusing to start without it."
+  );
+  process.exit(1);
+}
+
+// The MCP face used to have NO authentication at all — loopback was the whole security model, and
+// that stops being true the moment this is tunnelled (which BRIDGE-SETUP.md walks you toward) or
+// the moment anything else shares the box. Required rather than optional, and SEPARATE from the
+// extension's token: see auth.ts for why those two must not be the same secret.
+if (!MCP_TOKEN) {
+  console.error(
+    "FATAL: BRIDGE_MCP_TOKEN is not set. The MCP face is what an agent connects to, and it is no\n" +
+      "longer served unauthenticated. Generate one and set it:\n\n" +
+      "  export BRIDGE_MCP_TOKEN=$(openssl rand -hex 32)\n\n" +
+      "Then point your agent at it with that token:\n\n" +
+      '  claude mcp add --transport http browser http://127.0.0.1:' +
+      MCP_PORT +
+      '/mcp --header "Authorization: Bearer $BRIDGE_MCP_TOKEN"\n\n' +
+      "Use a DIFFERENT value from BRIDGE_ACCESS_TOKEN — they authenticate different parties."
+  );
+  process.exit(1);
+}
+
+if (MCP_TOKEN === TOKEN) {
+  console.error(
+    "FATAL: BRIDGE_MCP_TOKEN and BRIDGE_ACCESS_TOKEN are the same value. They authenticate\n" +
+      "different parties — an agent asking for work, and the browser extension dialling in — and\n" +
+      "they leak through different accidents. Sharing one means a leaked agent token also lets the\n" +
+      "holder impersonate the extension and take over the browser. Generate a second one."
   );
   process.exit(1);
 }
@@ -103,9 +142,29 @@ function buildServer(getSessionId: () => string | undefined): McpServer {
 const app = express();
 app.use(express.json({ limit: "10mb" })); // screenshots come back as base64
 
+/**
+ * Liveness ONLY, and unauthenticated on purpose — a tunnel health check and an operator's `curl`
+ * both need it before any token is in play.
+ *
+ * It used to spread `hub.getStatus()`, which reports whether a browser is attached, how many tabs
+ * it holds and which sessions are live. That is a description of a specific human's Chrome, served
+ * to anyone who can reach the port — fine while this face was loopback-only, wrong the moment it
+ * is exposed, and this endpoint is the one thing here that is deliberately reachable without a
+ * credential. Anything beyond "the process is up" now requires the token.
+ */
 app.get("/health", (_req, res) => {
+  res.json({ status: "ok", service: "remote-browser-bridge" });
+});
+
+/** The detailed picture, for whoever holds the MCP token. */
+app.get("/status", requireBearer(MCP_TOKEN), (_req, res) => {
   res.json({ status: "ok", service: "remote-browser-bridge", ...hub.getStatus() });
 });
+
+// AHEAD of the route, so it covers all three paths through `/mcp` — existing session, initialize,
+// and the stateless back-compat fallback. A check inside the handler would miss the last one,
+// which is opt-out by simply omitting the session header. See auth.ts.
+app.use("/mcp", requireBearer(MCP_TOKEN));
 
 // Stateful Streamable HTTP: one transport per MCP session (keyed by Mcp-Session-Id),
 // so each connected agent gets an isolated tab group in the extension. The MCP SDK
@@ -154,9 +213,11 @@ app.all("/mcp", async (req, res) => {
   await transport.handleRequest(req, res, req.body);
 });
 
-app.listen(MCP_PORT, "127.0.0.1", () => {
-  console.log(`Remote Browser Bridge — MCP face on http://127.0.0.1:${MCP_PORT}/mcp`);
-  console.log(`  Health : http://127.0.0.1:${MCP_PORT}/health`);
+app.listen(MCP_PORT, BIND_HOST, () => {
+  console.log(`Remote Browser Bridge — MCP face on http://${BIND_HOST}:${MCP_PORT}/mcp (token required)`);
+  console.log(`  Health : http://${BIND_HOST}:${MCP_PORT}/health`);
+  if (BIND_HOST !== "127.0.0.1" && BIND_HOST !== "localhost")
+    console.log(`  NOTE   : bound to ${BIND_HOST}, not loopback — the MCP token is the only thing in front of it.`);
 });
 
 // ── WS face (public via cloudflared) ─────────────────────────────────────────

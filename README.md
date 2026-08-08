@@ -30,7 +30,7 @@ See [PRD.md](PRD.md) for the product rationale and [BRIDGE-SETUP.md](BRIDGE-SETU
 There are two halves that meet over an authenticated WebSocket:
 
 - **On the VM** — [`packages/bridge-server`](packages/bridge-server) exposes browser control to the agent as MCP and relays each command to the browser. It has two faces:
-  - an **MCP** face on `localhost:3000/mcp` — the VM's Claude Code (or [`packages/agent`](packages/agent)) connects here and calls `browser_*` tools;
+  - an **MCP** face on `localhost:3000/mcp` — the VM's Claude Code (or [`packages/agent`](packages/agent)) connects here and calls `browser_*` tools. Requires `Authorization: Bearer $BRIDGE_MCP_TOKEN`;
   - a **WebSocket** face on `localhost:3002` — the extension dials in and authenticates with a shared token. `cloudflared` running *on the VM* publishes this face at a `wss://` URL.
 - **On your machine** — the [`packages/extension`](packages/extension) MV3 extension runs in a dedicated Chrome profile, dials out to that `wss://` URL, and drives a real tab with `chrome.debugger` (CDP).
 
@@ -93,10 +93,10 @@ npm run build
 ### 1 · VM — run the bridge
 
 ```bash
-BRIDGE_ACCESS_TOKEN=<token> MCP_PORT=3000 WS_PORT=3002 \
+BRIDGE_ACCESS_TOKEN=<token> BRIDGE_MCP_TOKEN=<mcp-token> MCP_PORT=3000 WS_PORT=3002 \
   node packages/bridge-server/dist/index.js
 # or under pm2:
-BRIDGE_ACCESS_TOKEN=<token> pm2 start packages/bridge-server/dist/index.js --name rbm-bridge
+BRIDGE_ACCESS_TOKEN=<token> BRIDGE_MCP_TOKEN=<mcp-token> pm2 start packages/bridge-server/dist/index.js --name rbm-bridge
 ```
 
 Publish the WS face with `cloudflared` and point the VM's agent at the MCP face
