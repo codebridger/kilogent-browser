@@ -35,6 +35,14 @@ openssl rand -hex 32
 
 Use the same value on the VM (`BRIDGE_ACCESS_TOKEN`) and in the extension popup.
 
+**A second, different token guards the MCP face** (`BRIDGE_MCP_TOKEN`). The two authenticate
+different parties — the extension dialling in, and an agent asking for work — so they leak through
+different accidents, and the bridge refuses to start if you set them to the same value:
+
+```bash
+export BRIDGE_MCP_TOKEN=$(openssl rand -hex 32)
+```
+
 ## 2. VM — run the bridge-server
 
 ```bash
@@ -43,11 +51,11 @@ npm install
 npm run build --workspace=packages/bridge-server
 
 # run (MCP face localhost:3000, WS face localhost:3002):
-BRIDGE_ACCESS_TOKEN=<token> MCP_PORT=3000 WS_PORT=3002 \
+BRIDGE_ACCESS_TOKEN=<token> BRIDGE_MCP_TOKEN=<mcp-token> MCP_PORT=3000 WS_PORT=3002 \
   node packages/bridge-server/dist/index.js
 
 # or under pm2:
-BRIDGE_ACCESS_TOKEN=<token> pm2 start packages/bridge-server/dist/index.js --name rbm-bridge
+BRIDGE_ACCESS_TOKEN=<token> BRIDGE_MCP_TOKEN=<mcp-token> pm2 start packages/bridge-server/dist/index.js --name rbm-bridge
 ```
 
 ## 3. VM — expose the WS face with cloudflared (no Access)
@@ -90,11 +98,17 @@ pm2 restart ceo-tunnel
 ```bash
 claude mcp remove browser 2>/dev/null
 claude mcp remove browser-daemon 2>/dev/null
-claude mcp add --transport http browser http://localhost:3000/mcp
+claude mcp add --transport http browser http://localhost:3000/mcp \
+  --header "Authorization: Bearer $BRIDGE_MCP_TOKEN"
 claude mcp list      # 'browser' → ✓ Connected
 ```
 
-(No Access headers — it's localhost on the VM.)
+No Cloudflare Access headers — this face is localhost on the VM. The bearer token is a separate
+thing and is **required**: the MCP face used to be served with no authentication at all, on the
+reasoning that loopback was the boundary. It is a boundary right up until somebody adds one tunnel
+ingress rule, and loopback is not a boundary between USERS on a shared box at all. If you do expose
+it, set `BRIDGE_BIND_HOST` deliberately — the token is then the only thing in front of a fully
+logged-in Chrome.
 
 ## 5. Mac — load the extension into the Aso Dara profile ONLY
 

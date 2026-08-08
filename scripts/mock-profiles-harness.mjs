@@ -17,6 +17,9 @@ import { WebSocket as WsWebSocket } from "ws";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
+// Separate from each profile's WS token — the bridge refuses to start when the two are equal.
+const MCP_TOKEN = "harness-mcp-token";
+
 // connection.js reads the `WebSocket.OPEN`/`CONNECTING` constants off the global;
 // point them (and the injected ctor) at `ws` so semantics match in Node.
 globalThis.WebSocket = WsWebSocket;
@@ -87,7 +90,7 @@ const { ConnectionManager } = await import("../packages/extension/src/connection
 
 async function startBridge({ mcpPort, wsPort, token }) {
   const proc = spawn("node", ["packages/bridge-server/dist/index.js"], {
-    env: { ...process.env, BRIDGE_ACCESS_TOKEN: token, MCP_PORT: String(mcpPort), WS_PORT: String(wsPort), SESSION_IDLE_MS: String(30 * 60_000) },
+    env: { ...process.env, BRIDGE_ACCESS_TOKEN: token, BRIDGE_MCP_TOKEN: MCP_TOKEN, MCP_PORT: String(mcpPort), WS_PORT: String(wsPort), SESSION_IDLE_MS: String(30 * 60_000) },
     stdio: ["ignore", "pipe", "pipe"],
   });
   proc.stderr.on("data", (d) => process.stderr.write(`[bridge:${wsPort}:err] ${d}`));
@@ -105,7 +108,7 @@ async function startBridge({ mcpPort, wsPort, token }) {
 
 const newClient = async (name, mcpPort) => {
   const c = new Client({ name, version: "1" });
-  const transport = new StreamableHTTPClientTransport(new URL(`http://localhost:${mcpPort}/mcp`));
+  const transport = new StreamableHTTPClientTransport(new URL(`http://localhost:${mcpPort}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${MCP_TOKEN}` } } });
   await c.connect(transport);
   return { client: c, transport };
 };
