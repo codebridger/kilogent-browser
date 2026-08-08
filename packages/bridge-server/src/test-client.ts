@@ -9,6 +9,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 const BRIDGE_URL = process.env.BRIDGE_URL ?? "http://localhost:3000/mcp";
+// The MCP face requires a token. Same one the bridge was started with.
+const MCP_TOKEN = process.env.BRIDGE_MCP_TOKEN ?? "";
+const AUTH = { requestInit: { headers: { Authorization: `Bearer ${MCP_TOKEN}` } } };
 
 type Part = { type: string; text?: string };
 const firstText = (r: unknown): string =>
@@ -25,7 +28,7 @@ async function main() {
   console.log(`Bridge MCP test client → ${BRIDGE_URL}\n`);
 
   const client = new Client({ name: "bridge-test-client", version: "0.1.0" });
-  await client.connect(new StreamableHTTPClientTransport(new URL(BRIDGE_URL)));
+  await client.connect(new StreamableHTTPClientTransport(new URL(BRIDGE_URL), AUTH));
   pass("connected to bridge MCP face");
 
   const tools = await client.listTools();
@@ -63,7 +66,7 @@ async function main() {
 
     // ── isolation: a second MCP client must not see client A's tabs ──────────
     const clientB = new Client({ name: "bridge-test-client-b", version: "0.1.0" });
-    await clientB.connect(new StreamableHTTPClientTransport(new URL(BRIDGE_URL)));
+    await clientB.connect(new StreamableHTTPClientTransport(new URL(BRIDGE_URL), AUTH));
     const listB = firstText(await clientB.callTool({ name: "browser_tab_list", arguments: {} }));
     !listB.includes(handleA ?? "\0") && (listB.includes("no tabs") || listB.trim() === "" || !listB.includes("example.com"))
       ? pass("second session does not see the first session's tabs")

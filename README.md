@@ -30,7 +30,7 @@ See [PRD.md](PRD.md) for the product rationale and [BRIDGE-SETUP.md](BRIDGE-SETU
 There are two halves that meet over an authenticated WebSocket:
 
 - **On the VM** — [`packages/bridge-server`](packages/bridge-server) exposes browser control to the agent as MCP and relays each command to the browser. It has two faces:
-  - an **MCP** face on `localhost:3000/mcp` — the VM's Claude Code (or [`packages/agent`](packages/agent)) connects here and calls `browser_*` tools;
+  - an **MCP** face on `localhost:3000/mcp` — the VM's Claude Code (or [`packages/agent`](packages/agent)) connects here and calls `browser_*` tools. Requires `Authorization: Bearer $BRIDGE_MCP_TOKEN`;
   - a **WebSocket** face on `localhost:3002` — the extension dials in and authenticates with a shared token. `cloudflared` running *on the VM* publishes this face at a `wss://` URL.
 - **On your machine** — the [`packages/extension`](packages/extension) MV3 extension runs in a dedicated Chrome profile, dials out to that `wss://` URL, and drives a real tab with `chrome.debugger` (CDP).
 
@@ -60,7 +60,8 @@ Browser tool names **mirror the official [Playwright MCP](https://github.com/mic
 
 | Path | What it is |
 |---|---|
-| [`packages/bridge-server`](packages/bridge-server) | VM-side bridge. MCP browser tools ⇄ WebSocket to the extension, with token auth, `/health`, and per-session tab tracking. Exposes `browser_*`, `check_local_status`, and `bridge_ping`. |
+| [`packages/bridge-server`](packages/bridge-server) | VM-side bridge. MCP browser tools ⇄ WebSocket to the extension, with token auth, `/health`, and per-session tab tracking. Exposes `browser_*`, `check_local_status`, and `bridge_ping`. **This is the self-host path** — if you are running this for yourself, this is the server you want. |
+| [`packages/relay`](packages/relay) | The **hosted** counterpart, used by Lumi Crew. Same extension, different server: it holds *many* browsers keyed `${ownerUid}:${browserId}`, authenticates each with a short-lived signed ticket instead of a static token, and serves **no MCP** — the browser tools live in Crew, which decides who may drive what on every call. Not needed for self-hosting. |
 | [`packages/extension`](packages/extension) | The MV3 Chrome extension. Popup for Agent URL + token, a service worker holding one outbound WS per profile (heartbeat + `chrome.alarms` keepalive + reconnect backoff), and a `chrome.debugger` executor. |
 | [`packages/agent`](packages/agent) | A standalone terminal agent — a stand-in for the VM's real client. Connects to the bridge and runs a tool-use loop. LLM is pluggable ([`src/llm`](packages/agent/src/llm)) — **Gemini** by default, Anthropic optional — with a no-API-key `smoke` test. |
 | [`packages/daemon`](packages/daemon) | Legacy local MCP sidecar (presence + session notifications) from the pre-bridge architecture. Kept for reference; superseded by the bridge. |
@@ -93,10 +94,10 @@ npm run build
 ### 1 · VM — run the bridge
 
 ```bash
-BRIDGE_ACCESS_TOKEN=<token> MCP_PORT=3000 WS_PORT=3002 \
+BRIDGE_ACCESS_TOKEN=<token> BRIDGE_MCP_TOKEN=<mcp-token> MCP_PORT=3000 WS_PORT=3002 \
   node packages/bridge-server/dist/index.js
 # or under pm2:
-BRIDGE_ACCESS_TOKEN=<token> pm2 start packages/bridge-server/dist/index.js --name rbm-bridge
+BRIDGE_ACCESS_TOKEN=<token> BRIDGE_MCP_TOKEN=<mcp-token> pm2 start packages/bridge-server/dist/index.js --name rbm-bridge
 ```
 
 Publish the WS face with `cloudflared` and point the VM's agent at the MCP face
@@ -114,9 +115,15 @@ Publish the WS face with `cloudflared` and point the VM's agent at the MCP face
 
 ```bash
 # on the VM
-curl -s localhost:3000/health          # → "extensionConnected":true
-node packages/bridge-server/dist/test-client.js   # bridge_ping → "pong"
+curl -s localhost:3000/health          # → {"status":"ok",…} — liveness, no credential needed
+curl -s localhost:3000/status -H "Authorization: Bearer $BRIDGE_MCP_TOKEN"   # → "extensionConnected":true
+BRIDGE_MCP_TOKEN=$BRIDGE_MCP_TOKEN node packages/bridge-server/dist/test-client.js   # bridge_ping → "pong"
 ```
+
+`/health` is deliberately thin. It used to report whether a browser was attached, how many tabs it
+held and which sessions were live — a description of a specific person's Chrome, served to anyone
+who could reach the port. That moved to `/status`, behind the token; `/health` stays anonymous
+because a tunnel health check has no credential.
 
 Or drive the whole path with the standalone agent's no-API-key check:
 
@@ -136,6 +143,9 @@ Each package also has `dev` (tsx watch), `start`, and `typecheck` scripts.
 
 ## Security notes
 
-- **Auth is an in-band token handshake** on the WebSocket — a browser can't send `CF-Access-*` headers, so the WS hostname must have no Cloudflare Access policy in front of it. The MCP face stays localhost-only on the VM and is never tunneled.
+- **Two tokens, and they must differ.** `BRIDGE_ACCESS_TOKEN` authenticates the extension dialling in; `BRIDGE_MCP_TOKEN` authenticates the agent asking for work. The bridge refuses to start if you set them to the same value — one is typed into a popup on a laptop, the other pasted into an agent config, so they leak through different accidents, and sharing one would mean a leaked agent token also lets the holder impersonate the extension and take over the browser.
+- **The WS face authenticates in-band**, as the first frame — a browser WebSocket cannot send `CF-Access-*` headers, so the WS hostname must have no Cloudflare Access policy in front of it. Every frame after that handshake is schema-validated and size-bounded (`protocol.ts`); the socket itself caps one frame at 12 MB.
+- **The MCP face requires a bearer token** and binds to loopback by default. It used to have no authentication at all, on the reasoning that loopback was the boundary — which holds until one tunnel ingress rule exists, and was never a boundary between *users* on a shared box. Set `BRIDGE_BIND_HOST` if you genuinely mean to expose it; the token is then the only thing in front of a fully logged-in Chrome.
+- **Sessions are mandatory.** Every call is routed to the tab group its MCP session owns, so a request that names no session is refused rather than being run against a shared "default".
 - **The extension is the trust boundary.** It can drive any tab in its profile via `chrome.debugger`; keep it in a dedicated profile with only the accounts the agent needs.
 - **Keepalive is the known risk.** MV3 evicts idle service workers; the WS heartbeat keeps it resident and a 1-minute `chrome.alarms` revives it, re-attaching `chrome.debugger` lazily on the next command.

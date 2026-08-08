@@ -16,6 +16,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 const TOKEN = "harness-token";
+// The MCP face authenticates too now, with a DIFFERENT secret from the extension's — the bridge
+// refuses to start if the two match, which is the property this pair exists to exercise.
+const MCP_TOKEN = "harness-mcp-token";
 const NAV_DELAY_MS = 300; // simulated page-load latency, to time parallelism
 
 let failures = 0;
@@ -85,7 +88,7 @@ const { Executor } = await import("../packages/extension/src/executor.js");
 /** Spawn the real bridge and wait for /health. */
 async function startBridge({ mcpPort, wsPort, idleMs }) {
   const proc = spawn("node", ["packages/bridge-server/dist/index.js"], {
-    env: { ...process.env, BRIDGE_ACCESS_TOKEN: TOKEN, MCP_PORT: String(mcpPort), WS_PORT: String(wsPort), SESSION_IDLE_MS: String(idleMs) },
+    env: { ...process.env, BRIDGE_ACCESS_TOKEN: TOKEN, BRIDGE_MCP_TOKEN: MCP_TOKEN, MCP_PORT: String(mcpPort), WS_PORT: String(wsPort), SESSION_IDLE_MS: String(idleMs) },
     stdio: ["ignore", "pipe", "pipe"],
   });
   proc.stdout.on("data", (d) => process.env.VERBOSE && process.stdout.write(`[bridge] ${d}`));
@@ -133,10 +136,54 @@ function startMockExtension(wsPort) {
 
 const newClient = async (name, mcpPort) => {
   const c = new Client({ name, version: "1" });
-  const transport = new StreamableHTTPClientTransport(new URL(`http://localhost:${mcpPort}/mcp`));
+  const transport = new StreamableHTTPClientTransport(new URL(`http://localhost:${mcpPort}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${MCP_TOKEN}` } } });
   await c.connect(transport);
   return { client: c, transport };
 };
+
+/**
+ * The MCP face must refuse a caller with no token, a wrong token, and a malformed header — and
+ * must still serve liveness to an anonymous one, because a tunnel health check has no credential.
+ */
+async function assertMcpAuth(mcpPort) {
+  const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
+  const post = (headers) =>
+    fetch(`http://localhost:${mcpPort}/mcp`, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json, text/event-stream", ...headers },
+      body,
+    });
+
+  const anon = await post({});
+  if (anon.status !== 401) throw new Error(`unauthenticated /mcp returned ${anon.status}, expected 401`);
+  pass("unauthenticated MCP call refused (401)");
+
+  const wrong = await post({ Authorization: "Bearer not-the-token" });
+  if (wrong.status !== 401) throw new Error(`wrong-token /mcp returned ${wrong.status}, expected 401`);
+  pass("wrong MCP token refused (401)");
+
+  // A near-miss of the right length, so the refusal is not merely a length check.
+  const nearMiss = await post({ Authorization: `Bearer ${MCP_TOKEN.slice(0, -1)}X` });
+  if (nearMiss.status !== 401) throw new Error(`near-miss token returned ${nearMiss.status}, expected 401`);
+  pass("near-miss MCP token refused (401)");
+
+  const malformed = await post({ Authorization: MCP_TOKEN });
+  if (malformed.status !== 401) throw new Error(`bare token (no Bearer) returned ${malformed.status}, expected 401`);
+  pass("token without the Bearer scheme refused (401)");
+
+  // Liveness stays open; the detailed picture does not. `/health` used to spread the hub status,
+  // which describes a specific human's Chrome — tabs held, sessions live — to anyone on the port.
+  const health = await fetch(`http://localhost:${mcpPort}/health`);
+  const healthBody = await health.json();
+  if (!health.ok) throw new Error(`/health returned ${health.status}`);
+  if ("extensionConnected" in healthBody)
+    throw new Error("/health leaked hub status to an anonymous caller");
+  pass("anonymous /health is liveness only, with no browser state");
+
+  const status = await fetch(`http://localhost:${mcpPort}/status`);
+  if (status.status !== 401) throw new Error(`anonymous /status returned ${status.status}, expected 401`);
+  pass("anonymous /status refused (401)");
+}
 
 // ── suite 1: multi-tab, parallelism, isolation, graceful teardown ─────────────
 async function mainSuite() {
@@ -145,6 +192,13 @@ async function mainSuite() {
   const ext = startMockExtension(wsPort);
   await ext.ready;
   console.log(`Suite 1: bridge ${mcpPort}, mock extension connected\n`);
+
+  // ── the MCP face refuses an unauthenticated caller ────────────────────────
+  //
+  // The DENY path, and it matters more than the allow path beside it: every other check here
+  // connects WITH a token, so a gate that silently stopped working would leave all of them green.
+  // This face had no authentication at all until it gained some, and loopback was the whole model.
+  await assertMcpAuth(mcpPort);
 
   const { client: A, transport: transportA } = await newClient("agent-A", mcpPort);
   const { client: B } = await newClient("agent-B", mcpPort);
