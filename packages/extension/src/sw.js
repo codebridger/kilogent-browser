@@ -33,6 +33,17 @@ const bridges = new ConnectionManager({
 
 /** The single Lumi connection, or null when signed out. One socket serves every Ship. */
 let lumi = null;
+/**
+ * The owner's own blocked origins, read once per tick rather than per command — `isBlocked` runs
+ * on a hot path.
+ *
+ * Declared UP HERE, above `tick()`'s only call site, rather than beside the function that
+ * refreshes it. `tick()` runs at module scope and reaches its first `await` before this line would
+ * otherwise execute; today that is fine, and it stops being fine the moment somebody adds a
+ * synchronous early path to it, which would then hit a temporal-dead-zone ReferenceError inside a
+ * service worker at start-up.
+ */
+let ownBlocklistCache = [];
 /** Ship ids this browser is offered to. Mirrored here so the heartbeat need not re-read storage. */
 let lumiShips = [];
 let lastError = "";
@@ -80,6 +91,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     // service worker that must stay alive across it is a service worker that will be evicted in
     // the middle. The popup owns the polling loop and hands over the finished session.
     setSession: async () => {
+      // TEAR THE SOCKET DOWN FIRST. `tick()` only builds a connection when there is none, so a
+      // session replaced in place — signing in as somebody else without signing out — would leave
+      // the previous account's socket up, minting tickets for a uid nobody is looking at any more.
+      teardownLumi();
       await storage.set({ [KEYS.session]: msg.session, [KEYS.schema]: SCHEMA_VERSION });
       await tick();
       return { ok: true };
@@ -227,8 +242,6 @@ async function tick() {
   await beat(idToken, session, id);
 }
 
-/** Read once per tick rather than per command: `isBlocked` runs on a hot path. */
-let ownBlocklistCache = [];
 async function refreshOwnBlocklist() {
   const store = await storage.get(KEYS.blocklist);
   ownBlocklistCache = Array.isArray(store[KEYS.blocklist]) ? store[KEYS.blocklist] : [];
