@@ -12,7 +12,7 @@
 // both belong to this person there rather than here. Duplicating them into the popup would make
 // the extension look like the place where access is decided, which it is not.
 import { KEYS, resolveEndpoint } from "./src/lumi-config.js";
-import { callFunction, startLogin, pollUntilApproved, exchangeCustomToken } from "./src/lumi-auth.js";
+import { callFunction, startLogin } from "./src/lumi-auth.js";
 import { listMyShips } from "./src/lumi-api.js";
 import { parseOwnEntry } from "./src/lumi-blocklist.js";
 
@@ -38,10 +38,28 @@ const send = (msg) => chrome.runtime.sendMessage(msg).catch(() => ({}));
 
 async function refresh() {
   snapshot = (await send({ type: "getStatus" })) || snapshot;
-  const store = await chrome.storage.local.get([KEYS.label, KEYS.blocklist]);
+  const store = await chrome.storage.local.get([KEYS.label, KEYS.blocklist, KEYS.pending]);
   if (document.activeElement !== $("label")) $("label").value = store[KEYS.label] || "";
   blocklist = Array.isArray(store[KEYS.blocklist]) ? store[KEYS.blocklist] : [];
   chosen = new Set(snapshot.ships || []);
+
+  // Reopening the popup mid-handshake must show the code again, not the sign-in button. The
+  // handshake lives in storage precisely because the popup is disposable — this is the read side
+  // of that, and without it somebody who closed the popup would start a second login while the
+  // first was still pending.
+  const pending = store[KEYS.pending];
+  if (pending && Date.now() < pending.expiresAt) {
+    signingIn = { started: pending };
+    $("displayCode").textContent = `${pending.userCode.slice(0, 4)}-${pending.userCode.slice(4)}`;
+    $("verifyUrl").textContent = pending.verificationUrl ?? "";
+    const left = Math.max(0, Math.round((pending.expiresAt - Date.now()) / 1000));
+    $("signInState").textContent = `Waiting for approval… ${Math.floor(left / 60)}:${String(
+      left % 60,
+    ).padStart(2, "0")}`;
+  } else if (signingIn && !pending) {
+    // The worker finished (or gave up) while this popup was open.
+    signingIn = null;
+  }
   render();
 }
 
@@ -132,44 +150,43 @@ function renderBlocklist() {
 }
 
 // ── sign-in ───────────────────────────────────────────────────────────────────
+/**
+ * Start a handshake and HAND IT TO THE WORKER, which does the polling.
+ *
+ * The popup cannot poll, and this is not a preference. Chrome destroys an extension popup the
+ * instant it loses focus, and the next line here opens the approval tab — which takes focus. A
+ * popup that owned the loop would be killed about a millisecond after starting it, the human would
+ * approve on the web page, and the extension would sit there signed out forever.
+ *
+ * So the popup's whole job is: get a code, show it, hand it over, open the tab. Everything after
+ * that survives the popup closing, because it is in storage and the worker's alarm re-enters it.
+ */
 $("signIn").addEventListener("click", async () => {
   const store = await chrome.storage.local.get(KEYS.endpoint);
   const endpoint = resolveEndpoint(store[KEYS.endpoint]);
   const label = $("label").value.trim() || "This browser";
   try {
     const started = await startLogin(endpoint, label);
-    signingIn = { started, controller: new AbortController() };
+    await send({
+      type: "beginLogin",
+      pending: {
+        userCode: started.userCode,
+        deviceCode: started.deviceCode,
+        expiresAt: Date.now() + (started.expiresIn ?? 600) * 1000,
+        // Kept so reopening the popup can still show where to go. The worker never reads it.
+        verificationUrl: started.verificationUrl,
+        label,
+        endpoint,
+      },
+    });
+    signingIn = { started };
     $("displayCode").textContent = started.displayCode;
     $("verifyUrl").textContent = started.verificationUrl;
+    $("signInState").textContent = "Waiting for approval…";
     render();
+    // Last, so the code is on screen before focus leaves — reopening the popup shows it again
+    // anyway, but there is no reason to make somebody go looking for it.
     chrome.tabs.create({ url: started.verificationUrl });
-
-    const approved = await pollUntilApproved(endpoint, started, {
-      signal: signingIn.controller.signal,
-      onTick: (secondsLeft) => {
-        $("signInState").textContent = `Waiting for approval… ${Math.floor(secondsLeft / 60)}:${String(
-          secondsLeft % 60,
-        ).padStart(2, "0")}`;
-      },
-    });
-
-    // The custom token is exchanged HERE and only the finished session is handed over, so the
-    // worker never holds a one-shot credential it might be evicted in the middle of redeeming.
-    const tokens = await exchangeCustomToken(approved.apiKey, approved.customToken);
-    await send({
-      type: "setSession",
-      session: {
-        ...tokens,
-        uid: approved.uid,
-        email: approved.email ?? "",
-        apiKey: approved.apiKey,
-        projectId: approved.projectId,
-      },
-    });
-    await chrome.storage.local.set({ [KEYS.label]: label });
-    signingIn = null;
-    await refresh();
-    await loadShips();
   } catch (e) {
     signingIn = null;
     $("error").textContent = String(e?.message || e);
@@ -178,10 +195,10 @@ $("signIn").addEventListener("click", async () => {
   }
 });
 
-$("cancelSignIn").addEventListener("click", () => {
-  signingIn?.controller.abort();
+$("cancelSignIn").addEventListener("click", async () => {
+  await send({ type: "cancelLogin" });
   signingIn = null;
-  render();
+  await refresh();
 });
 
 async function loadShips() {
@@ -364,5 +381,9 @@ loadProfiles();
 setInterval(() => {
   // Paused during sign-in: re-rendering under a live device code would replace the screen the
   // person is currently reading a code off.
-  if (!signingIn) refresh();
+  // Refreshes DURING sign-in too, which the previous version deliberately did not. That guard
+  // existed to stop a re-render replacing the code somebody was reading — but the worker owns the
+  // polling now, so refreshing is the only way this screen ever learns the login succeeded, and
+  // `refresh()` re-reads the pending handshake so the code stays put.
+  refresh();
 }, 1500);

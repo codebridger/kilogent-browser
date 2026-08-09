@@ -35,6 +35,16 @@ export const KEYS = {
   label: "lumi.label",
   endpoint: "lumi.endpoint",
   blocklist: "lumi.blocklist",
+  /**
+   * An in-flight device handshake: `{userCode, deviceCode, expiresAt, label, endpoint}`.
+   *
+   * IN STORAGE RATHER THAN IN MEMORY, and that is the whole reason sign-in works. The service
+   * worker owns the polling loop — the popup cannot, because Chrome destroys it the instant the
+   * approval tab takes focus — and a worker may be evicted at any point during a ten-minute human
+   * round-trip. Nothing here is bearer material: the device code is worthless without the approval
+   * it is waiting for, and the row is deleted the moment it is redeemed.
+   */
+  pending: "lumi.pending",
   /** Bumped to wipe a schema that changed shape. See `migrateIfNeeded`. */
   schema: "lumi.schema",
 };

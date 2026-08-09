@@ -18,7 +18,13 @@ import { Executor } from "./executor.js";
 import { ConnectionManager } from "./connection.js";
 import { LumiConnection } from "./lumi-connection.js";
 import { KEYS, SCHEMA_VERSION } from "./lumi-config.js";
-import { callFunction, getIdToken, loadSession, clearSession } from "./lumi-auth.js";
+import {
+  callFunction,
+  exchangeCustomToken,
+  getIdToken,
+  loadSession,
+  clearSession,
+} from "./lumi-auth.js";
 import { mintTicket, syncShips } from "./lumi-api.js";
 import { effectiveBlocklist, isBlocked } from "./lumi-blocklist.js";
 
@@ -87,9 +93,30 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       lumi?.reconnect();
       return { ok: true };
     },
-    // Sign-in is driven from the POPUP, not from here: it is a ten-minute human round-trip, and a
-    // service worker that must stay alive across it is a service worker that will be evicted in
-    // the middle. The popup owns the polling loop and hands over the finished session.
+    /**
+     * Begin a device handshake. THE WORKER POLLS, NOT THE POPUP.
+     *
+     * This was the other way round and could never have worked: Chrome closes an extension popup
+     * the moment it loses focus, and the very next thing sign-in does is open the approval tab —
+     * which moves focus. So the popup that owned the polling loop was guaranteed to be destroyed
+     * about a millisecond after starting it. The approval would land on the web page and the
+     * extension would never collect the session.
+     *
+     * The original objection to putting it here — a worker cannot be trusted to stay alive for a
+     * ten-minute human round-trip — is real and is answered by keeping NO state in memory. The
+     * handshake lives in storage, the loop below is just an optimisation for the common case, and
+     * the one-minute alarm re-enters it if the worker was evicted. Eviction costs latency, not the
+     * login.
+     */
+    beginLogin: async () => {
+      await storage.set({ [KEYS.pending]: msg.pending });
+      pollPending();
+      return { ok: true };
+    },
+    cancelLogin: async () => {
+      await storage.remove(KEYS.pending);
+      return { ok: true };
+    },
     setSession: async () => {
       // TEAR THE SOCKET DOWN FIRST. `tick()` only builds a connection when there is none, so a
       // session replaced in place — signing in as somebody else without signing out — would leave
@@ -192,6 +219,10 @@ function teardownLumi() {
 async function tick() {
   await reconcileBridges();
 
+  // The eviction backstop. If the worker was killed mid-handshake, the loop is gone but the
+  // handshake is not — it is in storage — so the alarm re-enters it. Costs latency, never the login.
+  pollPending();
+
   const id = await identity();
   const session = await loadSession(storage);
   if (!session) {
@@ -241,6 +272,82 @@ async function tick() {
   await refreshOwnBlocklist();
   await beat(idToken, session, id);
 }
+
+/**
+ * Poll an in-flight handshake until it is approved, expires, or is cancelled.
+ *
+ * Re-entrancy is guarded by `polling` rather than by a lock, because the two entry points — the
+ * popup starting a login, and the alarm re-entering after an eviction — can genuinely coincide,
+ * and two loops would burn the server's `slow_down` budget against each other.
+ *
+ * A failed poll is SWALLOWED and retried, except for the terminal statuses. The commonest reason a
+ * single poll fails is a network blip, and throwing away a code the human is still typing because
+ * of one is the worst possible answer.
+ */
+let polling = false;
+async function pollPending() {
+  if (polling) return;
+  polling = true;
+  try {
+    for (;;) {
+      const store = await storage.get(KEYS.pending);
+      const pending = store[KEYS.pending];
+      if (!pending) return;
+      if (Date.now() > pending.expiresAt) {
+        await storage.remove(KEYS.pending);
+        lastError = "That sign-in code expired before it was approved. Try again.";
+        return;
+      }
+
+      let result;
+      try {
+        result = await callFunction(pending.endpoint, "pollBrowserLogin", {
+          userCode: pending.userCode,
+          deviceCode: pending.deviceCode,
+        });
+      } catch (e) {
+        // Terminal: the handshake is gone — expired, claimed, or never existed. All three mean
+        // start again, so there is nothing to keep polling for.
+        if (e.status === "NOT_FOUND" || e.status === "PERMISSION_DENIED") {
+          await storage.remove(KEYS.pending);
+          lastError = "That sign-in request is no longer valid. Try again.";
+          return;
+        }
+        await sleep(2000);
+        continue;
+      }
+
+      if (result?.status === "approved") {
+        // Exchanged HERE, in the same loop that claimed it: the custom token is single-use and
+        // already spent as far as Crew is concerned, so handing it anywhere else adds a hop where
+        // it can be lost with no way to ask for another.
+        const tokens = await exchangeCustomToken(result.apiKey, result.customToken);
+        teardownLumi();
+        await storage.set({
+          [KEYS.session]: {
+            ...tokens,
+            uid: result.uid,
+            email: result.email ?? "",
+            apiKey: result.apiKey,
+            projectId: result.projectId,
+          },
+          [KEYS.schema]: SCHEMA_VERSION,
+          [KEYS.label]: pending.label,
+        });
+        await storage.remove(KEYS.pending);
+        lastError = "";
+        await tick();
+        return;
+      }
+
+      await sleep(result?.status === "slow_down" ? (result.interval ?? 4) * 1000 : 2000);
+    }
+  } finally {
+    polling = false;
+  }
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function refreshOwnBlocklist() {
   const store = await storage.get(KEYS.blocklist);

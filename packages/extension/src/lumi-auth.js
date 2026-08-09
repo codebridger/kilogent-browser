@@ -60,40 +60,18 @@ export async function startLogin(endpoint, label) {
   return callFunction(endpoint, "startBrowserLogin", { label });
 }
 
-/**
- * Poll until the human approves, or until we run out of road.
- *
- * `interval` is the server's to set and ours to honour — it answers `slow_down` with a doubled one
- * when we ask too fast, and ignoring that is how a client gets itself rate-limited. `onTick` exists
- * so the popup can keep showing the code and a countdown rather than freezing for ten minutes.
- */
-export async function pollUntilApproved(endpoint, started, { signal, onTick, sleep } = {}) {
-  const wait = sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
-  const deadline = Date.now() + (started.expiresIn ?? 600) * 1000;
-  let interval = (started.interval ?? 2) * 1000;
-
-  while (Date.now() < deadline) {
-    if (signal?.aborted) throw new Error("Sign-in cancelled.");
-    await wait(interval);
-    onTick?.(Math.max(0, Math.round((deadline - Date.now()) / 1000)));
-    let result;
-    try {
-      result = await callFunction(endpoint, "pollBrowserLogin", {
-        userCode: started.userCode,
-        deviceCode: started.deviceCode,
-      });
-    } catch (e) {
-      // NOT_FOUND is terminal — the handshake expired, was claimed, or never existed, and all
-      // three mean start again. Anything else is treated as a blip and retried until the deadline,
-      // because a dropped Wi-Fi network must not throw away a code the human is still typing.
-      if (e.status === "NOT_FOUND" || e.status === "PERMISSION_DENIED") throw e;
-      continue;
-    }
-    if (result?.status === "approved") return result;
-    if (result?.status === "slow_down") interval = (result.interval ?? 4) * 1000;
-  }
-  throw new Error("That code expired before it was approved. Try again.");
-}
+// `pollUntilApproved()` USED TO LIVE HERE, and its deletion is the fix for a bug that would have
+// made sign-in fail every single time.
+//
+// It let a CALLER own the polling loop, and the caller was the popup. Chrome destroys an extension
+// popup the moment it loses focus, and the line right after starting a login opens the approval
+// tab — which takes focus. So the loop was killed about a millisecond after it began: the human
+// approved on the web page, and the extension never collected the session.
+//
+// The loop now lives in the service worker (`pollPending()` in sw.js), driven off a handshake kept
+// in `chrome.storage.local` so that an evicted worker resumes it from the alarm rather than losing
+// it. This function is gone rather than left unused because an exported helper that does exactly
+// the wrong thing is an invitation to reintroduce the bug.
 
 // ── the Firebase session ──────────────────────────────────────────────────────────────────────
 
