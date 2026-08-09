@@ -1,16 +1,17 @@
 {
   "manifest_version": 3,
-  "name": "Remote Browser Agent (Aso Dara)",
-  "version": "0.1.0",
-  "description": "Connects this Chrome profile to the remote agent on the VM and lets it drive a tab via chrome.debugger. Install ONLY in the Aso Dara profile.",
+  "name": "Lumi Browser",
+  "version": "0.2.0",
+  "description": "Lend this Chrome to your Lumi workspace so agents can use sites you are already signed in to. You choose which agents, and for how long.",
+  "minimum_chrome_version": "116",
   "background": {
     "service_worker": "src/sw.js",
     "type": "module"
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Remote Browser Agent"
+    "default_title": "Lumi Browser"
   },
-  "permissions": ["debugger", "tabs", "tabGroups", "storage", "alarms"],
+  "permissions": ["debugger", "tabs", "tabGroups", "storage", "alarms", "idle"],
   "host_permissions": ["<all_urls>"]
 }

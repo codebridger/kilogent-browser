@@ -13,6 +13,11 @@
     "start:agent": "npm run start --workspace=packages/agent",
     "test:mock": "npm run build --workspace=packages/bridge-server && node scripts/mock-harness.mjs",
     "test:profiles": "npm run build --workspace=packages/bridge-server && node scripts/mock-profiles-harness.mjs",
-    "install:all": "npm install --workspaces"
+    "install:all": "npm install --workspaces",
+    "test:lumi": "node scripts/lumi-harness.mjs"
+  },
+  "devDependencies": {
+    "@lumi.ai/relay": "^0.1.2",
+    "ws": "^8.21.3"
   }
 }

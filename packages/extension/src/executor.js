@@ -207,22 +207,17 @@ export class Executor {
     return out;
   }
 
-  /** Find the active usable tab and adopt it into the default session (back-compat:
-   *  header-less callers with no explicit tab drive the current window like before). */
-  async adoptActiveTab(session) {
-    const tabs = await chrome.tabs.query({});
-    const usable = (t) =>
-      t.id != null &&
-      t.url &&
-      !t.url.startsWith("chrome://") &&
-      !t.url.startsWith("devtools://") &&
-      !this.tabIndex.has(t.id); // not already owned by some session
-    const cand = tabs.find((t) => t.active && usable(t)) || tabs.find(usable);
-    if (!cand) return null;
-    const handle = this.registerTab(session, cand.id, cand.url);
-    await this.ensureGrouped(session, cand.id);
-    return { handle, chromeTabId: cand.id };
-  }
+  // `adoptActiveTab()` USED TO LIVE HERE and was deliberately deleted.
+  //
+  // It found the user's current tab and pulled it into the default session, so a caller that named
+  // no tab drove whatever the human happened to be looking at. That was a reasonable convenience
+  // for a bridge somebody ran on their own machine for themselves. It is not one for a browser
+  // lent to an organisation: it was the ONLY path by which a session touched a tab the person
+  // opened, and while it existed, "agents can only see tabs they opened" was false. A sentence a
+  // product makes to somebody about their own logged-in Chrome has to be true without an asterisk.
+  //
+  // What replaces it is the branch below: a session with no tab OPENS one. Slightly more work for
+  // an agent, and an invariant instead of a footnote.
 
   /** Resolve args.tab (or the session's active tab) to an owned chrome tab. Opens a
    *  fresh tab if the session has none yet. Throws if the handle isn't owned. */
@@ -240,10 +235,7 @@ export class Executor {
     if (session.activeTab && session.tabs.has(session.activeTab)) {
       return { handle: session.activeTab, chromeTabId: session.tabs.get(session.activeTab).chromeTabId };
     }
-    if (session.id === DEFAULT_SESSION) {
-      const adopted = await this.adoptActiveTab(session);
-      if (adopted) return adopted;
-    }
+    // Every session opens its own tab, including the default one. See the note above.
     const created = await chrome.tabs.create({ url: "about:blank", active: true });
     const handle = this.registerTab(session, created.id, "about:blank");
     await this.ensureGrouped(session, created.id);

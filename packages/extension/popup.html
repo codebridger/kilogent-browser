@@ -3,29 +3,17 @@
   <head>
     <meta charset="utf-8" />
     <style>
-      :root {
-        color-scheme: light dark;
-      }
+      :root { color-scheme: light dark; }
       body {
         font: 13px/1.45 -apple-system, system-ui, sans-serif;
         width: 340px;
         margin: 0;
         padding: 14px 16px;
       }
-      h1 {
-        font-size: 14px;
-        margin: 0 0 4px;
-      }
-      .sub {
-        color: #8889;
-        font-size: 11px;
-        margin: 0 0 12px;
-      }
-      label {
-        display: block;
-        font-weight: 600;
-        margin: 8px 0 3px;
-      }
+      h1 { font-size: 14px; margin: 0 0 4px; }
+      .sub { color: #8889; font-size: 11px; margin: 0 0 12px; }
+      .note { color: #8889; font-size: 11px; margin: 6px 0 0; }
+      label { display: block; font-weight: 600; margin: 8px 0 3px; }
       input {
         width: 100%;
         box-sizing: border-box;
@@ -36,11 +24,7 @@
         background: transparent;
         color: inherit;
       }
-      .row {
-        display: flex;
-        gap: 8px;
-        margin-top: 12px;
-      }
+      .row { display: flex; gap: 8px; margin-top: 12px; }
       button {
         flex: 1;
         padding: 7px 10px;
@@ -52,10 +36,7 @@
         background: #2563eb;
         color: #fff;
       }
-      button.secondary {
-        background: #8883;
-        color: inherit;
-      }
+      button.secondary { background: #8883; color: inherit; }
       button.ghost {
         flex: 0 0 auto;
         background: transparent;
@@ -64,172 +45,137 @@
         padding: 4px 8px;
         font-size: 11px;
       }
-      /* profile list */
-      .profiles {
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
+      .hidden { display: none !important; }
+      .state { display: flex; align-items: center; gap: 6px; font-size: 12px; margin: 8px 0; }
+      .dot { width: 8px; height: 8px; border-radius: 50%; background: #8886; flex: none; }
+      .dot.ok { background: #16a34a; }
+      .dot.warn { background: #d97706; }
+      .dot.err { background: #dc2626; }
+      .code {
+        font: 600 20px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+        letter-spacing: 0.14em;
+        text-align: center;
+        margin: 10px 0 4px;
       }
-      .profile {
-        border: 1px solid #8883;
-        border-radius: 8px;
-        padding: 8px 10px;
-      }
-      .profile .top {
+      .list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+      .pick {
         display: flex;
         align-items: center;
         gap: 8px;
-      }
-      .profile .name {
-        font-weight: 600;
-        flex: 1;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-      .profile .url {
-        color: #8889;
-        font-size: 11px;
-        margin-top: 2px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-      .profile .state {
-        font-size: 11px;
-        margin-top: 4px;
-        color: #8889;
-      }
-      .actions {
-        display: flex;
-        gap: 6px;
-        margin-top: 8px;
-      }
-      .empty {
-        color: #8889;
-        font-size: 12px;
-        padding: 6px 0;
-      }
-      /* toggle switch */
-      .switch {
-        position: relative;
-        width: 34px;
-        height: 20px;
-        flex: 0 0 auto;
-      }
-      .switch input {
-        opacity: 0;
-        width: 0;
-        height: 0;
-        position: absolute;
-      }
-      .slider {
-        position: absolute;
-        inset: 0;
-        background: #8886;
-        border-radius: 20px;
-        transition: 0.15s;
+        border: 1px solid #8883;
+        border-radius: 8px;
+        padding: 7px 9px;
         cursor: pointer;
       }
+      .pick.on { border-color: #2563eb; background: #2563eb14; }
+      .pick .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .chip {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid #8883;
+        border-radius: 6px;
+        padding: 4px 8px;
+        font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      .chip .x { cursor: pointer; color: #dc2626; font-weight: 700; }
+      .who { font-size: 11px; color: #8889; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      details { margin-top: 14px; border-top: 1px solid #8883; padding-top: 10px; }
+      summary { cursor: pointer; font-size: 11px; color: #8889; }
+      .profiles { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+      .profile { border: 1px solid #8883; border-radius: 8px; padding: 8px 10px; }
+      .profile .top { display: flex; align-items: center; gap: 8px; }
+      .profile .name { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .profile .url { font-size: 11px; color: #8889; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .profile .actions { display: flex; gap: 6px; margin-top: 6px; }
+      .switch { position: relative; width: 34px; height: 20px; flex: none; }
+      .switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+      .slider { position: absolute; inset: 0; background: #8885; border-radius: 999px; transition: 0.15s; pointer-events: none; }
       .slider::before {
         content: "";
         position: absolute;
-        width: 14px;
-        height: 14px;
-        left: 3px;
-        top: 3px;
+        width: 16px; height: 16px;
+        left: 2px; top: 2px;
         background: #fff;
         border-radius: 50%;
         transition: 0.15s;
       }
-      .switch input:checked + .slider {
-        background: #16a34a;
-      }
-      .switch input:checked + .slider::before {
-        transform: translateX(14px);
-      }
-      .dot {
-        display: inline-block;
-        width: 9px;
-        height: 9px;
-        border-radius: 50%;
-        margin-right: 6px;
-        vertical-align: -1px;
-        background: #999;
-      }
-      .ok {
-        background: #16a34a;
-      }
-      .warn {
-        background: #d97706;
-      }
-      .err {
-        background: #dc2626;
-      }
-      .hint {
-        color: #8889;
-        font-size: 11px;
-        margin-top: 4px;
-      }
-      #form {
-        border: 1px solid #8884;
-        border-radius: 8px;
-        padding: 10px 12px;
-        margin-top: 12px;
-      }
-      #form h2 {
-        font-size: 12px;
-        margin: 0 0 4px;
-      }
-      .hidden {
-        display: none;
-      }
-      .check {
-        display: flex;
-        align-items: center;
-        gap: 7px;
-        font-weight: 600;
-        margin: 10px 0 0;
-        cursor: pointer;
-      }
-      .check input {
-        width: auto;
-        margin: 0;
-      }
+      .switch input:checked + .slider { background: #2563eb; }
+      .switch input:checked + .slider::before { transform: translateX(14px); }
+      .err { color: #dc2626; font-size: 11px; margin-top: 8px; }
+      .empty { color: #8889; font-size: 11px; }
     </style>
   </head>
   <body>
-    <h1>Remote Browser Agent</h1>
-    <p class="sub">Each profile is a bridge connection with its own isolated tabs. Toggle one on to connect.</p>
+    <h1>Lumi Browser</h1>
+    <p class="sub">Lend this Chrome to your workspace. Agents use sites you are already signed in to — they never see a password.</p>
 
-    <div id="profiles" class="profiles"></div>
+    <!-- signed out -->
+    <section id="signedOut">
+      <p class="note">Sign in with the Lumi account you already have. This does not share your browser with anyone — you choose that afterwards.</p>
+      <div class="row"><button id="signIn">Sign in with Lumi</button></div>
+    </section>
 
-    <div class="row">
-      <button id="add">+ Add profile</button>
-      <button id="reconnect" class="secondary">Reconnect all</button>
-    </div>
+    <!-- signing in: the device code -->
+    <section id="signingIn" class="hidden">
+      <p class="note">Approve this browser in the Lumi tab that just opened. If it did not open, go to the address below and enter this code.</p>
+      <p class="code" id="displayCode">----&#8209;----</p>
+      <p class="note" id="verifyUrl"></p>
+      <div class="state"><span class="dot warn"></span><span id="signInState">Waiting for approval…</span></div>
+      <div class="row"><button id="cancelSignIn" class="secondary">Cancel</button></div>
+    </section>
 
-    <div id="form" class="hidden">
-      <h2 id="formTitle">New profile</h2>
-      <label for="name">Name</label>
-      <input id="name" type="text" placeholder="e.g. Prod bridge" spellcheck="false" />
+    <!-- signed in -->
+    <section id="signedIn" class="hidden">
+      <div class="state"><span class="dot" id="dot"></span><span id="stateText">Connecting…</span></div>
+      <p class="who" id="who"></p>
 
-      <label for="url">Agent URL</label>
-      <input id="url" type="text" placeholder="wss://aso-agent.subturtle.app/rbm-ws" spellcheck="false" />
-      <div class="hint">The VM bridge WebSocket endpoint (wss://).</div>
+      <label for="label">This browser is called</label>
+      <input id="label" placeholder="Work laptop" />
 
-      <label for="token">Access Token</label>
-      <input id="token" type="password" placeholder="paste the shared token" spellcheck="false" />
+      <label>Offer it to</label>
+      <div class="list" id="ships"></div>
+      <p class="note" id="shipsNote">Sharing and permission are set in Lumi, on each workspace's Settings › Browsers.</p>
 
-      <label class="check"><input id="blockInput" type="checkbox" /> Block my input while the agent is acting</label>
-      <div class="hint">Suppresses your mouse/keyboard on this profile's tabs during agent activity, so you can't interfere mid-action.</div>
-
-      <div class="row">
-        <button id="saveProfile">Save</button>
-        <button id="cancel" class="secondary">Cancel</button>
+      <label>Never open these</label>
+      <div class="row" style="margin-top: 4px">
+        <input id="blockEntry" placeholder="bank.example.com" />
+        <button id="blockAdd" class="ghost">Block</button>
       </div>
-    </div>
+      <div class="list" id="blocklist"></div>
+      <p class="note">Your list always applies. A workspace can add to it and can never shorten it.</p>
 
-    <script src="popup.js"></script>
+      <p class="err hidden" id="error"></p>
+      <div class="row">
+        <button id="reconnect" class="secondary">Reconnect</button>
+        <button id="signOut" class="secondary">Sign out</button>
+      </div>
+    </section>
+
+    <!-- the self-hosted path: unchanged, and deliberately still here -->
+    <details id="advanced">
+      <summary>Advanced — self-hosted bridge</summary>
+      <p class="note">Point this browser at a bridge you run yourself. This is the open-source path and needs no Lumi account.</p>
+      <div class="profiles" id="profiles"></div>
+      <div class="row"><button id="add" class="secondary">Add a bridge</button></div>
+
+      <div id="form" class="hidden">
+        <label for="name">Name</label>
+        <input id="name" placeholder="My bridge" />
+        <label for="url">Agent URL</label>
+        <input id="url" placeholder="wss://bridge.example.com/ws" />
+        <label for="token">Shared token</label>
+        <input id="token" type="password" />
+        <label style="display: flex; align-items: center; gap: 6px; font-weight: 400">
+          <input type="checkbox" id="blockInput" style="width: auto" /> Block human input while a tab is driven
+        </label>
+        <div class="row">
+          <button id="saveProfile">Save</button>
+          <button id="cancel" class="secondary">Cancel</button>
+        </div>
+      </div>
+    </details>
+
+    <script src="popup.js" type="module"></script>
   </body>
 </html>
