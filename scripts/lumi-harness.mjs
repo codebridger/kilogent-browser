@@ -84,7 +84,15 @@ globalThis.chrome = {
         return cb?.({});
       }
       if (method === "Runtime.evaluate") {
-        return cb?.({ result: { value: JSON.stringify({ ok: true, url: tabs.get(target.tabId)?.url }) } });
+        // Branching on the expression, exactly as mock-profiles-harness.mjs does. A single canned
+        // value cannot serve both: `waitForLoad` polls for `{ready, href}` and gives up after 30s
+        // if it never sees "complete", which surfaces as a dispatch TIMEOUT rather than an error —
+        // and is what this harness did while it was still sending a tool name no executor has.
+        const t = tabs.get(target.tabId);
+        const value = params.expression.includes("document.readyState")
+          ? { ready: "complete", href: t ? t.url : "about:blank" }
+          : `SNAPSHOT[${t ? t.url : "?"}]`;
+        return cb?.({ result: { value } });
       }
       if (method === "Page.captureScreenshot") return cb?.({ data: "ZmFrZQ==" });
       return cb?.({});
@@ -177,7 +185,7 @@ async function main() {
   // ── 2. a dispatch round-trip ────────────────────────────────────────────────────────────────
   console.log("-- dispatch --");
   const opened = await dispatch(port, {
-    name: "browser_open",
+    name: "browser_navigate",
     args: { url: "https://example.test/" },
     sessionId: "job1",
     timeoutMs: 5000,
@@ -185,6 +193,15 @@ async function main() {
   ok(opened.status === 200, "a dispatch through the control plane returns 200");
   ok(opened.body?.outcome === "ok", "with outcome ok");
   ok(!!opened.body?.result?.content?.length, "and an MCP-shaped result the relay never reshaped");
+  // NOT JUST "something came back". `hub.ts` settles a failed `res` as
+  // `{outcome:"ok", result:{content:[…], isError:true}}`, so a content-length check passes on an
+  // ERROR — which is exactly how this harness sat green while dispatching `browser_open`, a name
+  // no executor has ever had. Assert the absence of isError, or this proves only that the wire
+  // works.
+  ok(
+    !!opened.body?.result && opened.body.result.isError !== true,
+    "and it SUCCEEDED — an error result also carries content, so isError is the real check",
+  );
 
   // ── 3. the blocklist, enforced HERE ──────────────────────────────────────────────────────────
   //
@@ -193,14 +210,14 @@ async function main() {
   // no tool ever named.
   console.log("-- blocklist --");
   await dispatch(port, {
-    name: "browser_open",
+    name: "browser_navigate",
     args: { url: "https://ok.test/" },
     sessionId: "job2",
     blockedOrigins: ["https://bank.test"],
     timeoutMs: 5000,
   });
   const blockedByShip = await dispatch(port, {
-    name: "browser_open",
+    name: "browser_navigate",
     args: { url: "https://bank.test/login" },
     sessionId: "job2",
     timeoutMs: 5000,
@@ -215,7 +232,7 @@ async function main() {
 
   ownBlocklist = ["https://payroll.test"];
   const blockedByOwner = await dispatch(port, {
-    name: "browser_open",
+    name: "browser_navigate",
     args: { url: "https://payroll.test/" },
     sessionId: "job2",
     timeoutMs: 5000,
@@ -226,7 +243,7 @@ async function main() {
   );
 
   const lookalike = await dispatch(port, {
-    name: "browser_open",
+    name: "browser_navigate",
     args: { url: "https://bank.test.evil.test/" },
     sessionId: "job2",
     timeoutMs: 5000,
@@ -252,8 +269,8 @@ async function main() {
 
   // ── 5. session teardown ──────────────────────────────────────────────────────────────────────
   console.log("-- sessions --");
-  await dispatch(port, { name: "browser_open", args: { url: "https://a.test/" }, sessionId: "jobA", timeoutMs: 5000 });
-  await dispatch(port, { name: "browser_open", args: { url: "https://b.test/" }, sessionId: "jobB", timeoutMs: 5000 });
+  await dispatch(port, { name: "browser_navigate", args: { url: "https://a.test/" }, sessionId: "jobA", timeoutMs: 5000 });
+  await dispatch(port, { name: "browser_navigate", args: { url: "https://b.test/" }, sessionId: "jobB", timeoutMs: 5000 });
   const before = conn.executor.sessions.size;
   await fetch(`http://127.0.0.1:${port}/v1/session/close`, {
     method: "POST",
@@ -267,7 +284,7 @@ async function main() {
 
   // ── 6. a browser nobody is holding ──────────────────────────────────────────────────────────
   const missing = await dispatch(port, {
-    name: "browser_open",
+    name: "browser_navigate",
     args: {},
     timeoutMs: 2000,
     browserId: "brw_nobody",
