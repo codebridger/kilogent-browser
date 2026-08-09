@@ -77,6 +77,14 @@ extension satisfy it. That matters because the two ends live in **different repo
 nothing linking them at compile time — each side testing its own belief about the wire format is
 exactly the class of bug that ships broken.
 
+What those harnesses do **not** cover is the service worker's own lifecycle — eviction, the alarm,
+a session replaced in place. Those need a real Chrome.
+
+Already checked by hand, so you need not wonder: all four hosts this extension talks to
+(`cloudfunctions.net`, `firestore.googleapis.com`, `identitytoolkit.googleapis.com`,
+`securetoken.googleapis.com`) answer a CORS preflight from a `chrome-extension://` origin,
+reflecting the origin and allowing `content-type` + `authorization`.
+
 ## A note on the extension ID
 
 `manifest.json` deliberately carries no `"key"`. It would need an RSA private half to be generated
