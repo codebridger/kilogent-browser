@@ -358,7 +358,7 @@ export class Executor {
         case "browser_navigate":
           return this.navigate(session, handle, chromeTabId, a.url, deadlineMs);
         case "browser_snapshot":
-          return this.snapshot(chromeTabId);
+          return this.snapshot(chromeTabId, { find: a.find, ref: a.ref });
         case "browser_click":
           return this.withInputAllowed(chromeTabId, () => this.click(chromeTabId, a.ref, a.element));
         case "browser_type":
@@ -411,8 +411,10 @@ export class Executor {
     }
   }
 
-  async snapshot(tabId) {
-    const tree = await this.evalFn(tabId, SNAPSHOT_FN);
+  async snapshot(tabId, narrow) {
+    // `narrow` is `{find}` or `{ref}` — see SNAPSHOT_FN. Passed as one object because `evalFn`
+    // takes a single argument, and because a second positional would be the next thing to drift.
+    const tree = await this.evalFn(tabId, SNAPSHOT_FN, narrow || null);
     return text(tree || "(empty page)");
   }
 
