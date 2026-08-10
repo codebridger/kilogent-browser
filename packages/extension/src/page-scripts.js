@@ -326,8 +326,11 @@ export const SELECT_OPTION_FN = function (arg) {
   const desc = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, "value");
   if (desc && desc.set) desc.set.call(el, hit.value);
   else el.value = hit.value;
-  // …and the index after it, because a <select> whose options carry no `value` has "" for every
-  // one of them: the index is then the only thing that tells them apart.
+  // …and the index after it, because `value =` selects the FIRST option carrying that value, and
+  // duplicates are legal — two `<option value="">` under one label, or a list that repeats a code.
+  // The index is then the only thing that tells them apart. (An earlier version of this comment
+  // claimed an option with no `value` attribute has "", which a real browser disproves in one
+  // line: it uses the option's TEXT. The reason to set the index survives; the stated one did not.)
   el.selectedIndex = hit.i;
   el.dispatchEvent(new Event("input", { bubbles: true }));
   el.dispatchEvent(new Event("change", { bubbles: true }));
