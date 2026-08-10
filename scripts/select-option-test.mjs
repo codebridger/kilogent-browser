@@ -97,6 +97,11 @@ ok(select(COUNTRIES).run('  United States  ').matched === true, 'and tolerant of
 }
 
 {
+  // Duplicate values are legal — `<option value="">` twice, or a list that repeats a code — and
+  // `value =` picks the FIRST of them. Verified against a real browser, which also corrected the
+  // reason this test was originally written for: an option with no `value` ATTRIBUTE does not have
+  // "", it has its own text. The duplicate case is the real one, so the test kept the assertion
+  // and lost the wrong justification.
   const { el, run } = select([['Yes', ''], ['No', '']]);
   const r = run('No');
   ok(r.matched === true && el.selectedIndex === 1,
