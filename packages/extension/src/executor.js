@@ -15,6 +15,7 @@ import {
   RESOLVE_BOX_FN,
   FOCUS_FN,
   SELECT_ALL_FN,
+  SELECT_OPTION_FN,
   OVERLAY_FN,
   OVERLAY_HIDE_FN,
   ALLOW_INPUT_FN,
@@ -66,6 +67,8 @@ function actionText(name, a) {
       return `click: ${a.element || a.ref || ""}`;
     case "browser_type":
       return `type into ${a.element || a.ref || ""}`;
+    case "browser_select_option":
+      return `choose "${a.value || ""}"`;
     case "browser_press_key":
       return `press ${a.key || "key"}`;
     case "browser_take_screenshot":
@@ -357,6 +360,8 @@ export class Executor {
           return this.withInputAllowed(chromeTabId, () =>
             this.type(chromeTabId, a.ref, a.text, a.submit, a.slowly, a.append)
           );
+        case "browser_select_option":
+          return this.withInputAllowed(chromeTabId, () => this.selectOption(chromeTabId, a.ref, a.value));
         case "browser_press_key":
           return this.withInputAllowed(chromeTabId, () => this.pressKey(chromeTabId, a.key));
         case "browser_take_screenshot":
@@ -457,6 +462,44 @@ export class Executor {
     }
     if (submit) await this.dispatchKey(tabId, "Enter");
     return text(`Typed into ${ref}${submit ? " and submitted" : ""}`);
+  }
+
+  async selectOption(tabId, ref, value) {
+    if (!ref) throw new ToolError("bad_args", "ref is required");
+    const r = await this.evalFn(tabId, SELECT_OPTION_FN, { ref, value });
+    if (!r || !r.found) {
+      throw new ToolError("ref_expired", `ref ${ref} not found — re-run browser_snapshot and use a fresh ref`);
+    }
+    if (r.notASelect) {
+      // Not a failure of the page — a page-drawn dropdown IS reachable, just not this way. The
+      // sentence has to say so, or the agent retries the one thing that cannot work.
+      throw new ToolError(
+        "not_a_select",
+        `${ref} is a <${r.tag}>, not a native dropdown. Its list is part of the page: click ${ref}, ` +
+          `take a fresh snapshot, then click the option you want.`
+      );
+    }
+    if (r.disabled) throw new ToolError("disabled", `${ref} is disabled — nothing can be chosen in it yet.`);
+    if (r.optionDisabled) {
+      throw new ToolError("option_disabled", `"${r.optionDisabled}" cannot be chosen — it is disabled.`);
+    }
+    if (!r.matched) {
+      // The options come back on a miss so the retry is informed. Capped, with the count kept, for
+      // SNAPSHOT_FN's reason: a 240-country list should cost an agent a hint, not a page of tokens.
+      const shown = (r.options || []).slice(0, 40);
+      const tail = (r.options || []).length > shown.length ? ` (${shown.length} of ${r.options.length})` : "";
+      const list = shown.length ? ` Options are: ${shown.map((o) => `"${o}"`).join(", ")}.${tail}` : "";
+      if (r.ambiguous) {
+        throw new ToolError(
+          "ambiguous_option",
+          `"${value}" matches ${r.ambiguous.length} options — ${r.ambiguous
+            .map((o) => `"${o}"`)
+            .join(", ")}. Use the full text of the one you want.`
+        );
+      }
+      throw new ToolError("no_such_option", `No option matching "${value}".${list}`);
+    }
+    return text(`Selected "${r.label}" in ${ref}`);
   }
 
   async pressKey(tabId, key) {
