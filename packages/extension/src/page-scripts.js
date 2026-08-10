@@ -270,6 +270,70 @@ export const OVERLAY_HIDE_FN = function () {
   return true;
 };
 
+/** Choose an option in a native <select>, by label or by value.
+ *
+ *  WHY THIS IS NOT A CLICK. Clicking a <select> opens a list drawn by the operating system, not by
+ *  the page — CDP input events cannot reach it, so every plausible imitation (click then arrow
+ *  keys, click then type) leaves the wrong value chosen while reporting success. The whole popup
+ *  is a red herring: it is a way of ASKING a human, and the actual state is one property. So we
+ *  set the property and fire the events a real choice fires, which is exactly what Playwright's
+ *  `selectOption` does.
+ *
+ *  Matching is exact-label, then exact-value, then a UNIQUE substring — an ambiguous substring is
+ *  a MISS on purpose, because "UK" against both "UK" and "UK (Northern Ireland)" has a right
+ *  answer only when it is exact, and quietly taking the first is how an agent ships the wrong
+ *  address. A miss hands back the options, so the retry is informed rather than another guess. */
+export const SELECT_OPTION_FN = function (arg) {
+  const el = window.__rbm && window.__rbm.elements && window.__rbm.elements[arg && arg.ref];
+  if (!el) return { found: false };
+  if (el.tagName !== "SELECT") return { found: true, notASelect: true, tag: el.tagName.toLowerCase() };
+  if (el.disabled) return { found: true, disabled: true };
+
+  const opts = [];
+  for (let i = 0; i < el.options.length; i++) {
+    const o = el.options[i];
+    opts.push({ i: i, label: String(o.label || o.text || "").trim(), value: String(o.value), off: !!o.disabled });
+  }
+  const want = String(arg && arg.value != null ? arg.value : "").trim();
+  const lc = want.toLowerCase();
+  const names = opts.map(function (o) { return o.label || o.value; });
+
+  let hit = null;
+  let ambiguous = null;
+  if (want) {
+    for (const o of opts) if (!hit && o.label.toLowerCase() === lc) hit = o;
+    for (const o of opts) if (!hit && o.value.toLowerCase() === lc) hit = o;
+    if (!hit) {
+      const part = opts.filter(function (o) { return o.label.toLowerCase().indexOf(lc) !== -1; });
+      if (part.length === 1) hit = part[0];
+      else if (part.length > 1) ambiguous = part.map(function (o) { return o.label || o.value; });
+    }
+  }
+  if (!hit) return { found: true, matched: false, ambiguous: ambiguous, options: names };
+  // A disabled option is usually the "Choose one…" placeholder. Selecting it would be a no-op the
+  // page then rejects on submit, so say so rather than reporting a choice that did not happen.
+  if (hit.off) return { found: true, matched: false, optionDisabled: hit.label || hit.value, options: names };
+
+  try {
+    el.scrollIntoView({ block: "center" });
+    el.focus();
+  } catch (e) {}
+  // React caches the last value it saw and DROPS a change event that agrees with the cache, so
+  // without clearing the tracker the option moves on screen and the application never hears about
+  // it — the single most confusing way this can half-work. Setting through the prototype's own
+  // setter (rather than `el.value =`) is what keeps that tracker in the loop at all.
+  if (el._valueTracker && typeof el._valueTracker.setValue === "function") el._valueTracker.setValue("");
+  const desc = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, "value");
+  if (desc && desc.set) desc.set.call(el, hit.value);
+  else el.value = hit.value;
+  // …and the index after it, because a <select> whose options carry no `value` has "" for every
+  // one of them: the index is then the only thing that tells them apart.
+  el.selectedIndex = hit.i;
+  el.dispatchEvent(new Event("input", { bubbles: true }));
+  el.dispatchEvent(new Event("change", { bubbles: true }));
+  return { found: true, matched: true, label: hit.label || hit.value, value: hit.value };
+};
+
 /** Select all text in a ref's editable element (input/textarea/contenteditable). */
 export const SELECT_ALL_FN = function (ref) {
   const el = window.__rbm && window.__rbm.elements && window.__rbm.elements[ref];

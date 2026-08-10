@@ -14,6 +14,7 @@
     "test:mock": "npm run build --workspace=packages/bridge-server && node scripts/mock-harness.mjs",
     "test:profiles": "npm run build --workspace=packages/bridge-server && node scripts/mock-profiles-harness.mjs",
     "install:all": "npm install --workspaces",
-    "test:snapshot": "node scripts/snapshot-narrow-test.mjs"
+    "test:snapshot": "node scripts/snapshot-narrow-test.mjs",
+    "test:select": "node scripts/select-option-test.mjs"
   }
 }
