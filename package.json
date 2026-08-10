@@ -14,7 +14,8 @@
     "test:mock": "npm run build --workspace=packages/bridge-server && node scripts/mock-harness.mjs",
     "test:profiles": "npm run build --workspace=packages/bridge-server && node scripts/mock-profiles-harness.mjs",
     "install:all": "npm install --workspaces",
-    "test:lumi": "node scripts/lumi-harness.mjs"
+    "test:lumi": "node scripts/lumi-harness.mjs",
+    "test:snapshot": "node scripts/snapshot-narrow-test.mjs"
   },
   "devDependencies": {
     "@lumi.ai/relay": "^0.1.2",

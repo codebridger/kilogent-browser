@@ -5,7 +5,7 @@
 // uses: re-snapshot after navigation/DOM changes.
 
 /** Returns a YAML-ish accessibility tree string; stamps window.__rbm.elements. */
-export const SNAPSHOT_FN = function () {
+export const SNAPSHOT_FN = function (narrow) {
   const W = window;
   W.__rbm = W.__rbm || {};
   W.__rbm.epoch = (W.__rbm.epoch || 0) + 1;
@@ -123,7 +123,33 @@ export const SNAPSHOT_FN = function () {
   W.__rbm.elements = els;
   walk(document.body, 1);
   const header = '- page "' + (document.title || "") + '" (' + location.href + ")";
-  return header + "\n" + (lines.join("\n") || "  (no interactable elements found)");
+
+  // NARROWING, which the tool has advertised since day one and silently ignored — `browser_read`
+  // offers `find` and `ref`, Crew forwards both, and the whole tree came back regardless. A page
+  // of any size costs a few thousand tokens, so an agent that asked for one row and paid for all
+  // of them was the common case rather than the edge one.
+  //
+  // Filtering the OUTPUT rather than the walk is deliberate: `W.__rbm.elements` is still populated
+  // for every element, so a ref that is not shown still resolves for `browser_act`. Narrowing
+  // changes what the agent READS, never what it can reach.
+  var all = lines;
+  if (narrow && narrow.ref) {
+    var want = "[ref=" + narrow.ref + "]";
+    var one = all.filter(function (l) { return l.indexOf(want) !== -1; });
+    return header + "\n" + (one.length
+      ? one.join("\n")
+      : '  (no element ' + narrow.ref + ' on the page now — take a fresh snapshot)');
+  }
+  if (narrow && narrow.find) {
+    var n = String(narrow.find).toLowerCase();
+    var hit = all.filter(function (l) { return l.toLowerCase().indexOf(n) !== -1; });
+    // The COUNT is the point of the footer: an agent that sees 3 of 412 knows the page is bigger
+    // than what it is looking at, and can widen rather than concluding the rest is not there.
+    return header + "\n" + (hit.length
+      ? hit.join("\n") + '\n  (' + hit.length + " of " + all.length + ' elements match "' + narrow.find + '")'
+      : '  (nothing matches "' + narrow.find + '" — ' + all.length + " elements on this page)");
+  }
+  return header + "\n" + (all.join("\n") || "  (no interactable elements found)");
 };
 
 /** Resolve a ref to box-center viewport coords (for trusted mouse dispatch). */
