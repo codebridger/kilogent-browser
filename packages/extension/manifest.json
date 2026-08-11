@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Lumi Browser",
+  "name": "Remote Browser Agent",
   "version": "0.2.0",
-  "description": "Lend this Chrome to your Lumi workspace so agents can use sites you are already signed in to. You choose which agents, and for how long.",
+  "description": "Connects this Chrome profile to a remote agent over an outbound WebSocket and lets it drive a tab via chrome.debugger. Install in a dedicated profile.",
   "minimum_chrome_version": "116",
   "background": {
     "service_worker": "src/sw.js",
@@ -10,8 +10,16 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Lumi Browser"
+    "default_title": "Remote Browser Agent"
   },
-  "permissions": ["debugger", "tabs", "tabGroups", "storage", "alarms", "idle"],
-  "host_permissions": ["<all_urls>"]
+  "permissions": [
+    "debugger",
+    "tabs",
+    "tabGroups",
+    "storage",
+    "alarms"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ]
 }

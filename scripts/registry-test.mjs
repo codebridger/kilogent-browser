@@ -276,89 +276,36 @@ await check("the registry drives the real transport end to end", async () => {
 });
 
 
-// ── the two transports together ──────────────────────────────────────────────────────────────
-//
-// The arrangement `sw.js` actually builds. Porting the second transport onto the seam is what
-// exposed the getStatus/reconnect hole in the first place, so it is worth asserting rather than
-// assuming.
+// ── the registry-level messages ──────────────────────────────────────────────────────────────
 
-console.log("\nBoth transports at once:");
+console.log("\nRegistry-level messages:");
 
-const { createLumiTransport } = await import("../packages/extension/src/providers/lumi/index.js");
-
-function bothTransports() {
-  const storage = fakeStorage();
-  const deps = {
-    storage,
-    WebSocketCtor: class {},
-    userAgent: "test-agent",
-    extensionVersion: "0.0.0",
-    log: () => {},
-  };
-  return { storage, registry: new TransportRegistry([createBridgeTransport(deps), createLumiTransport(deps)], quiet) };
-}
-
-await check("the lumi transport satisfies the shape too", async () => {
-  const { registry } = bothTransports();
-  const [, lumi] = registry.transports;
-  assert.equal(lumi.name, "lumi");
-  for (const m of ["reconcile", "reconnectAll", "onDetach", "onTabRemoved", "status", "onMessage", "teardown"]) {
-    assert.equal(typeof lumi[m], "function", `lumi is missing ${m}`);
-  }
-});
-
-await check("their status keys MERGE and do not collide", async () => {
-  // A collision is a bug in whichever transport was added second, and it would silently overwrite.
-  const { registry } = bothTransports();
-  const bridgeKeys = Object.keys(registry.transports[0].status());
-  const lumiKeys = Object.keys(registry.transports[1].status());
-  const overlap = bridgeKeys.filter((k) => lumiKeys.includes(k));
-  assert.deepEqual(overlap, [], `both transports claim ${overlap.join(", ")}`);
-  const merged = registry.status();
-  for (const k of [...bridgeKeys, ...lumiKeys]) assert.ok(k in merged, `${k} was lost in the merge`);
-});
-
-await check("the popup's whole contract is present in one snapshot", async () => {
-  // popup.js reads exactly these. A missing one is a blank panel, not an error.
-  const { registry } = bothTransports();
-  const s = registry.status();
-  for (const k of ["profiles", "lumi", "session", "ships", "lastError"]) {
-    assert.ok(k in s, `the popup reads ${k} and the snapshot has no such key`);
-  }
-});
-
-await check("NEITHER transport claims getStatus or reconnect", async () => {
-  // The hole this port found. If either claims one, the other never gets it — and the symptom is a
-  // popup panel that is permanently empty, with nothing in any log.
-  const { registry } = bothTransports();
+await check("NO shipped transport claims getStatus or reconnect", async () => {
+  // Both belong to EVERY transport, so a claim means the first in the list answers for the whole
+  // extension and the rest are never asked. The worker handles them from status()/reconnectAll().
+  //
+  // Found by putting a SECOND transport on the seam and watching it receive neither, because the
+  // first in the list had already claimed both. That transport has since moved to its own
+  // repository; this assertion stays, because it guards the next one somebody writes.
+  const { TRANSPORTS } = await import("../packages/extension/src/providers/index.js");
+  const deps = { storage: fakeStorage(), WebSocketCtor: class {}, log: () => {} };
+  const registry = new TransportRegistry(TRANSPORTS.map((make) => make(deps)), quiet);
   for (const type of ["getStatus", "reconnect"]) {
     assert.deepEqual(await registry.onMessage({ type }), { handled: false }, `${type} was claimed`);
   }
 });
 
-await check("each transport gets its OWN messages, and only those", async () => {
-  const { registry } = bothTransports();
-  const saved = await registry.onMessage({ type: "saveProfiles", profiles: [] });
-  assert.equal(saved.by, "bridge");
-  const out = await registry.onMessage({ type: "setBlocklist", blocklist: ["x.test"] });
-  assert.equal(out.by, "lumi", "a lumi message did not reach the lumi transport");
-});
-
-await check("reconnectAll and detach reach both without either throwing", async () => {
-  const { registry } = bothTransports();
-  registry.reconnectAll();
-  registry.onDetach({ tabId: 3 }, "target_closed");
-  registry.onTabRemoved(3);
-});
-
-await check("signed out, reconcile settles and reports no session", async () => {
-  const { registry } = bothTransports();
-  await registry.reconcile();
-  const s = registry.status();
-  assert.equal(s.session, null);
-  assert.equal(s.lumi, null);
-  assert.deepEqual(s.ships, []);
-  assert.deepEqual(s.profiles, []);
+await check("every shipped transport satisfies the registry's shape", async () => {
+  const { TRANSPORTS } = await import("../packages/extension/src/providers/index.js");
+  const deps = { storage: fakeStorage(), WebSocketCtor: class {}, log: () => {} };
+  for (const make of TRANSPORTS) {
+    const t = make(deps);
+    assert.equal(typeof t.name, "string", "a transport has no name");
+    for (const [m, v] of Object.entries(t)) {
+      if (m === "name") continue;
+      assert.equal(typeof v, "function", `${t.name}.${m} is not callable`);
+    }
+  }
 });
 
 if (failures.length) {

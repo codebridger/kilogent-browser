@@ -11,10 +11,9 @@
 // worth an upstream issue rather than a local edit; the seam is young and it is meant to move.
 
 import { createBridgeTransport } from "./bridge/index.js";
-import { createLumiTransport } from "./lumi/index.js";
 
 /**
  * Factories, not instances, so nothing connects at import time — the worker decides when.
  * @type {Array<(deps: any) => import("./registry.js").Transport>}
  */
-export const TRANSPORTS = [createBridgeTransport, createLumiTransport];
+export const TRANSPORTS = [createBridgeTransport];
