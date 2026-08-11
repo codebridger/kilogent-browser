@@ -18,6 +18,10 @@ import { createBridgePanel } from "./bridge/popup.js";
  *   render   (snapshot: object) => void    called on mount and then on every poll
  *   summary  string, OPTIONAL — present means "fold me into a <details> with this label"
  *
+ * Each factory receives `{storage, send, openTab}` — Chrome's storage, a message sender that never
+ * throws, and a way to open a tab. Everything a panel needs from the browser arrives that way, so a
+ * panel is loadable outside one and `scripts/popup-test.mjs` needs no Chrome shim.
+ *
  * A panel owns ITS OWN MARKUP. `popup.html` is core and a fork must not edit it — which is only
  * possible because nothing in it is panel-specific.
  *

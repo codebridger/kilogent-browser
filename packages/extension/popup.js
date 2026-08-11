@@ -22,7 +22,14 @@ async function send(msg) {
   }
 }
 
-const deps = { storage: chrome.storage.local, send };
+const deps = {
+  storage: chrome.storage.local,
+  send,
+  /** Open a URL in a new tab. Injected rather than left to the panel because a panel that reaches
+   *  for `chrome.tabs` directly cannot be loaded outside a browser, and any panel with a sign-in
+   *  flow needs exactly this one call. */
+  openTab: (url) => chrome.tabs.create({ url }),
+};
 
 const root = document.getElementById("panels");
 const panels = PANELS.map((make) => make(deps));
