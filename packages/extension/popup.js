@@ -31,7 +31,22 @@ for (const panel of panels) {
   const section = document.createElement("section");
   section.className = "panel";
   section.dataset.panel = panel.name;
-  root.appendChild(section);
+
+  // A panel may declare itself SECONDARY by exposing a `summary`, and the shell folds it into a
+  // <details>. It lives here rather than in the panel because collapsing is a decision about the
+  // popup as a whole — which of several ways to connect is the ordinary one — and a panel cannot
+  // see the others. A fork expresses it in its own `panels.js`, without editing the panel.
+  if (panel.summary) {
+    const details = document.createElement("details");
+    const summary = document.createElement("summary");
+    summary.textContent = panel.summary;
+    details.appendChild(summary);
+    details.appendChild(section);
+    root.appendChild(details);
+  } else {
+    root.appendChild(section);
+  }
+
   try {
     panel.mount(section);
   } catch (err) {

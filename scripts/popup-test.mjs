@@ -249,6 +249,83 @@ await check("render before mount does not throw", async () => {
   withDom(window, () => panel.render({ profiles: [] }));
 });
 
+
+console.log("\nMounting several panels:");
+
+/** Run the shell's own mount loop against a set of panels. Mirrors popup.js — see the note below. */
+function mountAll(window, panels) {
+  const root = window.document.getElementById("panels");
+  for (const panel of panels) {
+    const section = window.document.createElement("section");
+    section.className = "panel";
+    section.dataset.panel = panel.name;
+    if (panel.summary) {
+      const details = window.document.createElement("details");
+      const summary = window.document.createElement("summary");
+      summary.textContent = panel.summary;
+      details.appendChild(summary);
+      details.appendChild(section);
+      root.appendChild(details);
+    } else {
+      root.appendChild(section);
+    }
+    try {
+      panel.mount(section);
+    } catch (err) {
+      void err;
+    }
+  }
+  return root;
+}
+
+const stubPanel = (name, over = {}) => ({
+  name,
+  mounted: false,
+  mount(root) { this.mounted = true; root.textContent = name; },
+  render() {},
+  ...over,
+});
+
+await check("a panel declaring a `summary` is folded into a <details>", async () => {
+  // The fork collapses the self-hosted bridge under "Advanced". Expressed by the panel list, not
+  // by editing the panel — a fork must be able to demote a core panel without forking it.
+  const window = popupWindow();
+  const root = mountAll(window, [stubPanel("main"), stubPanel("extra", { summary: "Advanced" })]);
+  const details = root.querySelector("details");
+  assert.ok(details, "no <details> was created");
+  assert.equal(details.querySelector("summary").textContent, "Advanced");
+  assert.ok(details.querySelector('section[data-panel="extra"]'), "the panel is not inside it");
+  assert.equal(root.querySelector('section[data-panel="main"]').closest("details"), null,
+    "a panel with no summary was collapsed anyway");
+});
+
+await check("panels appear in the order they are listed", async () => {
+  const window = popupWindow();
+  const root = mountAll(window, [stubPanel("first"), stubPanel("second")]);
+  const names = [...root.querySelectorAll("section[data-panel]")].map((s) => s.dataset.panel);
+  assert.deepEqual(names, ["first", "second"]);
+});
+
+await check("one panel throwing on mount does not stop the next", async () => {
+  // The same isolation the worker's registry has. A fork's half-finished panel must not blank the
+  // one that works — and a blank popup is indistinguishable from a dead extension.
+  const window = popupWindow();
+  const good = stubPanel("good");
+  mountAll(window, [stubPanel("bad", { mount() { throw new Error("bang"); } }), good]);
+  assert.equal(good.mounted, true, "the second panel never mounted");
+});
+
+await check("the shell's real mount loop is the one this file models", async () => {
+  // `mountAll` above is a COPY of popup.js's loop, because popup.js runs on import and needs a
+  // Chrome global. A copy that drifts tests nothing, so pin the behaviours it claims to share.
+  const src = readFileSync(path.join(root, "packages/extension/popup.js"), "utf8");
+  assert.match(src, /panel\.summary/, "the shell no longer honours `summary`");
+  assert.match(src, /createElement\("details"\)/, "the shell no longer builds a <details>");
+  assert.match(src, /dataset\.panel = panel\.name/, "sections are no longer tagged with the panel name");
+  assert.match(src, /try \{\s*panel\.mount\(section\);\s*\} catch/, "mount is no longer isolated");
+  assert.match(src, /try \{\s*panel\.render\([\s\S]{0,40}\} catch/, "render is no longer isolated");
+});
+
 if (failures.length) {
   console.error(`\n✗ popup: ${failures.length} failed, ${pass} passed.`);
   for (const f of failures) console.error(`    ${f}`);
