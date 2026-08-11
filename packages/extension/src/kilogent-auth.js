@@ -1,4 +1,4 @@
-// Signing in to Lumi from an MV3 service worker, over REST and nothing else.
+// Signing in to Kilogent from an MV3 service worker, over REST and nothing else.
 //
 // WHY REST RATHER THAN THE FIREBASE SDK. This package has no package.json, no bundler and no
 // build step — you load the directory and it runs — and keeping it that way is most of the reason
@@ -12,10 +12,10 @@
 // session is persisted by hand and read at module load, so a cold start knows who it is
 // synchronously.
 //
-// NOTHING HERE GRANTS ACCESS TO ANYTHING. A Lumi session lets this browser offer itself; whether
+// NOTHING HERE GRANTS ACCESS TO ANYTHING. A Kilogent session lets this browser offer itself; whether
 // an agent may drive it is three separate locks held by other people, re-checked per call.
 
-import { KEYS, resolveEndpoint } from "./lumi-config.js";
+import { KEYS, resolveEndpoint } from "./kilogent-config.js";
 
 /** Refresh this far before expiry. One minute is the alarm period, so five gives four attempts. */
 const REFRESH_SKEW_MS = 5 * 60 * 1000;
@@ -117,7 +117,7 @@ export async function refreshSession(apiKey, refreshToken) {
   const body = await res.json().catch(() => null);
   if (!res.ok) {
     const reason = String(body?.error?.message || "");
-    const err = new Error(reason || "Could not refresh the Lumi session.");
+    const err = new Error(reason || "Could not refresh the Kilogent session.");
     err.fatal = /INVALID_REFRESH_TOKEN|TOKEN_EXPIRED|USER_DISABLED|USER_NOT_FOUND/.test(reason);
     throw err;
   }
@@ -140,7 +140,7 @@ export function needsRefresh(session, now = Date.now()) {
  * The whole session, as one stored object.
  *
  * `{idToken, refreshToken, expiresAt, uid, email, apiKey, projectId}` — the last two arrive from
- * the approval, so this object is genuinely everything the extension needs to talk to Lumi. A
+ * the approval, so this object is genuinely everything the extension needs to talk to Kilogent. A
  * partial write is worse than none: a stored refresh token with no apiKey can never be redeemed.
  */
 export async function loadSession(storage) {

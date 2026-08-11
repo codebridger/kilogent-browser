@@ -1,8 +1,8 @@
-// One live socket to the Lumi relay, speaking protocol v2.
+// One live socket to the Kilogent relay, speaking protocol v2.
 //
 // The sibling of `Connection` in connection.js, and the difference is entirely in the handshake
 // and the credential. That one dials a bridge somebody runs themselves and authenticates a STATIC
-// token typed into a form; this one dials Lumi's relay and authenticates a TICKET that Crew mints
+// token typed into a form; this one dials Kilogent's relay and authenticates a TICKET that Crew mints
 // per socket and that expires in ten minutes. What is deliberately identical is everything after
 // `welcome` — `cmd`/`res`/`status`/`ping` — so `Executor` never learns which server it is talking
 // to, and the CDP layer is shared whole.
@@ -12,14 +12,14 @@
 // at rest, and a laptop that slept through the weekend wakes up and simply asks for another.
 //
 // Dependency-injected (`WebSocketCtor`, `makeExecutor`, `mintTicket`) exactly as `Connection` is,
-// so `scripts/lumi-contract-harness.mjs` can drive it in Node against the relay's REAL protocol
+// so `scripts/kilogent-contract-harness.mjs` can drive it in Node against the relay's REAL protocol
 // validator with no Chrome present.
 
 const DEFAULT_HEARTBEAT_MS = 20000;
 const BACKOFF_BASE_MS = 1000;
 const BACKOFF_CAP_MS = 30000;
 
-export class LumiConnection {
+export class KilogentConnection {
   /**
    * @param {{browserId:string,label:string,agentString?:string,extensionVersion?:string}} identity
    * @param {{WebSocketCtor:typeof WebSocket, makeExecutor:Function, mintTicket:()=>Promise<{ticket:string,relayUrl:string}>, ownBlocklist:()=>string[], onStateChange?:Function, log?:Function}} deps
@@ -38,12 +38,12 @@ export class LumiConnection {
     this.sessionBlocklists = new Map();
     this.executor = deps.makeExecutor(
       (attached, tabId, url, reason) => this.pushStatus(attached, tabId, url, reason),
-      identity.label || "Lumi",
+      identity.label || "Kilogent",
     );
   }
 
   log(...args) {
-    this.deps.log?.(`[lumi ${this.identity.label || this.identity.browserId}]`, ...args);
+    this.deps.log?.(`[kilogent ${this.identity.label || this.identity.browserId}]`, ...args);
   }
 
   setState(state) {
@@ -296,7 +296,7 @@ export class LumiConnection {
     let tabCount = 0;
     for (const s of this.executor.sessions.values()) tabCount += s.tabs.size;
     return {
-      kind: "lumi",
+      kind: "kilogent",
       id: this.identity.browserId,
       name: this.identity.label,
       connState: this.connState,

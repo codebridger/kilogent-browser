@@ -1,6 +1,6 @@
 // MV3 service worker. Two modes, one worker.
 //
-//   Lumi mode (the default)   one socket to Lumi's relay, authenticated by a ticket Crew mints
+//   Kilogent mode (the default)   one socket to Kilogent's relay, authenticated by a ticket Crew mints
 //                             per connection, serving every Ship this person lends the browser to.
 //   Bridge mode (advanced)    the original: N sockets to bridges you run yourself, each with a
 //                             static token typed into a form.
@@ -16,17 +16,17 @@
 // all state is rebuilt from storage on cold start.
 import { Executor } from "./executor.js";
 import { ConnectionManager } from "./connection.js";
-import { LumiConnection } from "./lumi-connection.js";
-import { KEYS, SCHEMA_VERSION } from "./lumi-config.js";
+import { KilogentConnection } from "./kilogent-connection.js";
+import { KEYS, SCHEMA_VERSION } from "./kilogent-config.js";
 import {
   callFunction,
   exchangeCustomToken,
   getIdToken,
   loadSession,
   clearSession,
-} from "./lumi-auth.js";
-import { mintTicket, syncShips } from "./lumi-api.js";
-import { effectiveBlocklist, isBlocked } from "./lumi-blocklist.js";
+} from "./kilogent-auth.js";
+import { mintTicket, syncShips } from "./kilogent-api.js";
+import { effectiveBlocklist, isBlocked } from "./kilogent-blocklist.js";
 
 const storage = chrome.storage.local;
 
@@ -37,8 +37,8 @@ const bridges = new ConnectionManager({
   log: (...a) => console.log(...a),
 });
 
-/** The single Lumi connection, or null when signed out. One socket serves every Ship. */
-let lumi = null;
+/** The single Kilogent connection, or null when signed out. One socket serves every Ship. */
+let kilogent = null;
 /**
  * The owner's own blocked origins, read once per tick rather than per command — `isBlocked` runs
  * on a hot path.
@@ -51,7 +51,7 @@ let lumi = null;
  */
 let ownBlocklistCache = [];
 /** Ship ids this browser is offered to. Mirrored here so the heartbeat need not re-read storage. */
-let lumiShips = [];
+let kilogentShips = [];
 let lastError = "";
 
 // ── top-level registration (re-runs on every cold start) ──────────────────────
@@ -66,10 +66,10 @@ chrome.tabs.onRemoved.addListener((tabId) => route("onTabRemoved", tabId));
 
 function route(kind, a, b) {
   if (kind === "onDetach") {
-    if (a?.tabId != null && lumi?.ownsTab(a.tabId)) return lumi.routeDetach(a, b);
+    if (a?.tabId != null && kilogent?.ownsTab(a.tabId)) return kilogent.routeDetach(a, b);
     return bridges.onDetach(a, b);
   }
-  if (lumi?.ownsTab(a)) return lumi.routeTabRemoved(a);
+  if (kilogent?.ownsTab(a)) return kilogent.routeTabRemoved(a);
   return bridges.onTabRemoved(a);
 }
 
@@ -78,9 +78,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   const handlers = {
     getStatus: async () => ({
       bridges: bridges.statusSnapshot().profiles,
-      lumi: lumi ? lumi.statusSnapshot() : null,
+      kilogent: kilogent ? kilogent.statusSnapshot() : null,
       session: await publicSession(),
-      ships: lumiShips,
+      ships: kilogentShips,
       lastError,
     }),
     saveProfiles: async () => {
@@ -90,7 +90,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     },
     reconnect: async () => {
       bridges.reconnectAll();
-      lumi?.reconnect();
+      kilogent?.reconnect();
       return { ok: true };
     },
     /**
@@ -121,14 +121,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       // TEAR THE SOCKET DOWN FIRST. `tick()` only builds a connection when there is none, so a
       // session replaced in place — signing in as somebody else without signing out — would leave
       // the previous account's socket up, minting tickets for a uid nobody is looking at any more.
-      teardownLumi();
+      teardownKilogent();
       await storage.set({ [KEYS.session]: msg.session, [KEYS.schema]: SCHEMA_VERSION });
       await tick();
       return { ok: true };
     },
     setShips: async () => {
-      lumiShips = Array.isArray(msg.ships) ? msg.ships : [];
-      await storage.set({ [KEYS.ships]: lumiShips });
+      kilogentShips = Array.isArray(msg.ships) ? msg.ships : [];
+      await storage.set({ [KEYS.ships]: kilogentShips });
       await tick();
       return { ok: true };
     },
@@ -138,8 +138,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     },
     signOut: async () => {
       await clearSession(storage);
-      lumiShips = [];
-      teardownLumi();
+      kilogentShips = [];
+      teardownKilogent();
       return { ok: true };
     },
   };
@@ -202,9 +202,9 @@ async function identity() {
   };
 }
 
-function teardownLumi() {
-  lumi?.teardown();
-  lumi = null;
+function teardownKilogent() {
+  kilogent?.teardown();
+  kilogent = null;
 }
 
 // ── the tick ──────────────────────────────────────────────────────────────────
@@ -226,12 +226,12 @@ async function tick() {
   const id = await identity();
   const session = await loadSession(storage);
   if (!session) {
-    teardownLumi();
+    teardownKilogent();
     return;
   }
 
   const store = await storage.get(KEYS.ships);
-  lumiShips = Array.isArray(store[KEYS.ships]) ? store[KEYS.ships] : [];
+  kilogentShips = Array.isArray(store[KEYS.ships]) ? store[KEYS.ships] : [];
 
   // Refreshes if it is within five minutes of expiry, and returns null only when the session is
   // genuinely dead — a transient failure keeps the old token, because signing somebody out
@@ -239,22 +239,22 @@ async function tick() {
   const idToken = await getIdToken(storage, {
     onSignedOut: (message) => {
       lastError = message;
-      teardownLumi();
+      teardownKilogent();
     },
   });
   if (!idToken) {
-    teardownLumi();
+    teardownKilogent();
     return;
   }
 
-  if (!lumi) {
-    lumi = new LumiConnection(id, {
+  if (!kilogent) {
+    kilogent = new KilogentConnection(id, {
       WebSocketCtor: WebSocket,
       makeExecutor: (pushStatus, label) => new Executor(pushStatus, label),
       mintTicket: async () => {
         const token = await getIdToken(storage);
         if (!token) {
-          const err = new Error("Signed out of Lumi.");
+          const err = new Error("Signed out of Kilogent.");
           err.fatal = true;
           throw err;
         }
@@ -266,7 +266,7 @@ async function tick() {
       onStateChange: () => {},
       log: (...a) => console.log(...a),
     });
-    lumi.connect();
+    kilogent.connect();
   }
 
   await refreshOwnBlocklist();
@@ -322,7 +322,7 @@ async function pollPending() {
         // already spent as far as Crew is concerned, so handing it anywhere else adds a hop where
         // it can be lost with no way to ask for another.
         const tokens = await exchangeCustomToken(result.apiKey, result.customToken);
-        teardownLumi();
+        teardownKilogent();
         await storage.set({
           [KEYS.session]: {
             ...tokens,
@@ -364,26 +364,26 @@ async function refreshOwnBlocklist() {
  * temporary revocation permanent for daemons.
  */
 async function beat(idToken, session, id) {
-  if (lumiShips.length === 0) return;
+  if (kilogentShips.length === 0) return;
   const live = {
     label: id.label,
     agentString: id.agentString,
     extensionVersion: id.extensionVersion,
     lastSeenAt: Date.now(),
-    tabCount: lumi ? lumi.statusSnapshot().tabCount : 0,
+    tabCount: kilogent ? kilogent.statusSnapshot().tabCount : 0,
   };
   const { removed, failed } = await syncShips(
     idToken,
     session.projectId,
-    lumiShips,
+    kilogentShips,
     id.browserId,
     id,
     session.uid,
     live,
   );
   if (removed.length) {
-    lumiShips = lumiShips.filter((s) => !removed.includes(s));
-    await storage.set({ [KEYS.ships]: lumiShips });
+    kilogentShips = kilogentShips.filter((s) => !removed.includes(s));
+    await storage.set({ [KEYS.ships]: kilogentShips });
     lastError = `Removed from ${removed.length} workspace${removed.length === 1 ? "" : "s"}.`;
   }
   if (failed.length) lastError = failed[0].message;

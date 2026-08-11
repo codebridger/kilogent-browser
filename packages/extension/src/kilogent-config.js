@@ -1,4 +1,4 @@
-// Where the Lumi mode talks to, and the one thing that is compiled in rather than discovered.
+// Where the Kilogent mode talks to, and the one thing that is compiled in rather than discovered.
 //
 // The extension ships knowing ONE url: Crew's callable endpoint. Everything else it needs —
 // the Firebase apiKey, the project id, the relay's WebSocket address — arrives at runtime, from
@@ -27,14 +27,14 @@ export function resolveEndpoint(stored) {
   return raw.replace(/\/+$/, "");
 }
 
-/** Storage keys. Namespaced so the pre-Lumi bridge profiles can coexist untouched. */
+/** Storage keys. Namespaced so the pre-Kilogent bridge profiles can coexist untouched. */
 export const KEYS = {
-  session: "lumi.session",
-  browserId: "lumi.browserId",
-  ships: "lumi.ships",
-  label: "lumi.label",
-  endpoint: "lumi.endpoint",
-  blocklist: "lumi.blocklist",
+  session: "kilogent.session",
+  browserId: "kilogent.browserId",
+  ships: "kilogent.ships",
+  label: "kilogent.label",
+  endpoint: "kilogent.endpoint",
+  blocklist: "kilogent.blocklist",
   /**
    * An in-flight device handshake: `{userCode, deviceCode, expiresAt, label, endpoint}`.
    *
@@ -44,10 +44,10 @@ export const KEYS = {
    * round-trip. Nothing here is bearer material: the device code is worthless without the approval
    * it is waiting for, and the row is deleted the moment it is redeemed.
    */
-  pending: "lumi.pending",
+  pending: "kilogent.pending",
   /** Bumped to wipe a schema that changed shape. See `migrateIfNeeded`. */
-  schema: "lumi.schema",
+  schema: "kilogent.schema",
 };
 
-/** Current storage schema. A mismatch clears Lumi's keys rather than trying to upgrade them. */
+/** Current storage schema. A mismatch clears Kilogent's keys rather than trying to upgrade them. */
 export const SCHEMA_VERSION = 1;

@@ -1,16 +1,50 @@
-# Remote Browser MCP
+# Kilogent Browser
 
-Give an AI agent running on a remote VM control of a **real Chrome on your own machine** through the Model Context Protocol — reusing your real logins, cookies, extensions, and home IP, while you watch and take over at any time.
+Lend your own Chrome to a **Kilogent** workspace, so agents can use the sites you are already
+signed in to. They never see a password, and they never see a tab you opened.
+
+The only thing you install is a Chrome extension. It dials *out*, so there is nothing to open on
+your machine — no inbound port, no tunnel, no `--remote-debugging` flag.
 
 <p align="center">
-  <img src="docs/infographic.svg" alt="Remote Browser MCP — an AI agent on a cloud VM drives your real local Chrome through an outbound-only MV3 extension" width="100%">
+  <img src="docs/infographic.svg" alt="An agent drives your real local Chrome through an outbound-only MV3 extension" width="100%">
 </p>
 
-Cloud browsers get blocked, fingerprinted, and logged out. Your own Chrome is already trusted everywhere — Remote Browser MCP simply lets your agent use it. The **only thing you install locally is a Chrome extension**. It dials *out* to the agent, so there are no inbound ports, no local tunnel, and no `--remote-debugging` flags on your machine. Set it up once, and any MCP-speaking agent can browse as *you* — while you literally watch it work in your own browser window.
+## This is a fork, and that is on purpose
 
-Perfect for: personal automation agents (LinkedIn outreach, dashboards behind SSO, admin panels), research agents that need sites in your logged-in state, and any workflow where a headless datacenter browser just gets captcha-walled.
+Upstream is **[navidshad/remote-browser-mcp](https://github.com/navidshad/remote-browser-mcp)** —
+the open project: the extension core, the relay, and the MCP server. This repository is the
+**Kilogent-branded build** of it.
 
-See [PRD.md](PRD.md) for the product rationale and [BRIDGE-SETUP.md](BRIDGE-SETUP.md) for the full deployment runbook.
+Everything Kilogent-specific lives in files named `kilogent-*`:
+
+| File | What it does |
+|---|---|
+| `packages/extension/src/kilogent-auth.js` | signing in, and keeping the session alive |
+| `packages/extension/src/kilogent-connection.js` | the socket to Kilogent's relay |
+| `packages/extension/src/kilogent-api.js` | the browser's own row, written under rules |
+| `packages/extension/src/kilogent-blocklist.js` | the second of the two blocklist levels |
+| `packages/extension/src/kilogent-config.js` | the one URL compiled in, and the storage keys |
+
+**The rule that keeps this fork alive: never edit the core.** `executor.js`, `page-scripts.js`
+and `connection.js` come from upstream untouched, so `git pull upstream main` stays clean. A fix
+that belongs to everybody goes upstream as a pull request and comes back down; only branding and
+the Kilogent transport are ours.
+
+```bash
+git remote add upstream https://github.com/navidshad/remote-browser-mcp.git
+git pull upstream main
+```
+
+⚠️ `sw.js` and `popup.js` are the two files that do NOT yet obey that rule — Kilogent's transport
+was written into them in place rather than beside them, so they will conflict on every upstream
+pull until the core/provider split lands. That split is the next piece of work.
+
+## Running it against your own server instead
+
+The self-hosted path is untouched and needs no Kilogent account: point the extension at a bridge
+you run yourself, with a URL and a shared token. See `packages/bridge-server` below, and the
+Advanced section of the popup.
 
 ## Features
 
@@ -60,7 +94,7 @@ Browser tool names **mirror the official [Playwright MCP](https://github.com/mic
 
 | Path | What it is |
 |---|---|
-| [`packages/bridge-server`](packages/bridge-server) | VM-side bridge. MCP browser tools ⇄ WebSocket to the extension, with token auth, `/health`, and per-session tab tracking. Exposes `browser_*`, `check_local_status`, and `bridge_ping`. **This is the self-host path**, and the only server in this repo — if you are running this for yourself, this is the one you want. (Lumi's own hosted relay, which the same extension talks to in Lumi mode, is a different program and lives in Lumi's private repo; nothing here depends on it.) |
+| [`packages/bridge-server`](packages/bridge-server) | VM-side bridge. MCP browser tools ⇄ WebSocket to the extension, with token auth, `/health`, and per-session tab tracking. Exposes `browser_*`, `check_local_status`, and `bridge_ping`. **This is the self-host path**, and the only server in this repo — if you are running this for yourself, this is the one you want. (Kilogent's own hosted relay, which the same extension talks to in Kilogent mode, is a different program and lives in Kilogent's private repo; nothing here depends on it.) |
 | [`packages/extension`](packages/extension) | The MV3 Chrome extension. Popup for Agent URL + token, a service worker holding one outbound WS per profile (heartbeat + `chrome.alarms` keepalive + reconnect backoff), and a `chrome.debugger` executor. |
 | [`packages/agent`](packages/agent) | A standalone terminal agent — a stand-in for the VM's real client. Connects to the bridge and runs a tool-use loop. LLM is pluggable ([`src/llm`](packages/agent/src/llm)) — **Gemini** by default, Anthropic optional — with a no-API-key `smoke` test. |
 | [`packages/daemon`](packages/daemon) | Legacy local MCP sidecar (presence + session notifications) from the pre-bridge architecture. Kept for reference; superseded by the bridge. |

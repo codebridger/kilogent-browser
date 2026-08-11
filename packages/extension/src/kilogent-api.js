@@ -1,11 +1,11 @@
-// Talking to Lumi Crew: two callables, and the browser's own row in Firestore.
+// Talking to Kilogent Crew: two callables, and the browser's own row in Firestore.
 //
 // The row is written DIRECTLY by this extension rather than by a callable, and that is the whole
 // security model rather than a shortcut: `firestore.rules` pins `ownerUid` to `request.auth.uid`,
 // so a browser can only ever claim the person who signed in. No amount of bugs here can forge a
 // different owner, because the check is not in this file.
 //
-// Firestore REST rather than the SDK, for `lumi-auth.js`'s reason — no build step. The mapping to
+// Firestore REST rather than the SDK, for `kilogent-auth.js`'s reason — no build step. The mapping to
 // and from Firestore's typed JSON is small enough to write out, and writing it out is what keeps
 // the extension a directory you can read.
 //
@@ -149,7 +149,7 @@ export async function listMyShips(callFunction, endpoint, idToken) {
  */
 export async function mintTicket(callFunction, endpoint, idToken, browserId) {
   const result = await callFunction(endpoint, "mintBrowserRelayTicket", { browserId }, idToken);
-  if (!result?.ticket || !result?.relayUrl) throw new Error("Lumi did not return a relay ticket.");
+  if (!result?.ticket || !result?.relayUrl) throw new Error("Kilogent did not return a relay ticket.");
   return { ticket: result.ticket, relayUrl: result.relayUrl };
 }
 

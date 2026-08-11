@@ -107,18 +107,18 @@
     </style>
   </head>
   <body>
-    <h1>Lumi Browser</h1>
+    <h1>Kilogent Browser</h1>
     <p class="sub">Lend this Chrome to your workspace. Agents use sites you are already signed in to — they never see a password.</p>
 
     <!-- signed out -->
     <section id="signedOut">
-      <p class="note">Sign in with the Lumi account you already have. This does not share your browser with anyone — you choose that afterwards.</p>
-      <div class="row"><button id="signIn">Sign in with Lumi</button></div>
+      <p class="note">Sign in with the Kilogent account you already have. This does not share your browser with anyone — you choose that afterwards.</p>
+      <div class="row"><button id="signIn">Sign in with Kilogent</button></div>
     </section>
 
     <!-- signing in: the device code -->
     <section id="signingIn" class="hidden">
-      <p class="note">Approve this browser in the Lumi tab that just opened. If it did not open, go to the address below and enter this code.</p>
+      <p class="note">Approve this browser in the Kilogent tab that just opened. If it did not open, go to the address below and enter this code.</p>
       <p class="code" id="displayCode">----&#8209;----</p>
       <p class="note" id="verifyUrl"></p>
       <div class="state"><span class="dot warn"></span><span id="signInState">Waiting for approval…</span></div>
@@ -135,7 +135,7 @@
 
       <label>Offer it to</label>
       <div class="list" id="ships"></div>
-      <p class="note" id="shipsNote">Sharing and permission are set in Lumi, on each workspace's Settings › Browsers.</p>
+      <p class="note" id="shipsNote">Sharing and permission are set in Kilogent, on each workspace's Settings › Browsers.</p>
 
       <label>Never open these</label>
       <div class="row" style="margin-top: 4px">
@@ -155,7 +155,7 @@
     <!-- the self-hosted path: unchanged, and deliberately still here -->
     <details id="advanced">
       <summary>Advanced — self-hosted bridge</summary>
-      <p class="note">Point this browser at a bridge you run yourself. This is the open-source path and needs no Lumi account.</p>
+      <p class="note">Point this browser at a bridge you run yourself. This is the open-source path and needs no Kilogent account.</p>
       <div class="profiles" id="profiles"></div>
       <div class="row"><button id="add" class="secondary">Add a bridge</button></div>
 

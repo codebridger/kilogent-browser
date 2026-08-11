@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Lumi Browser",
+  "name": "Kilogent Browser",
   "version": "0.2.0",
-  "description": "Lend this Chrome to your Lumi workspace so agents can use sites you are already signed in to. You choose which agents, and for how long.",
+  "description": "Lend this Chrome to your Kilogent workspace so agents can use sites you are already signed in to. You choose which agents, and for how long.",
   "minimum_chrome_version": "116",
   "background": {
     "service_worker": "src/sw.js",
@@ -10,7 +10,7 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Lumi Browser"
+    "default_title": "Kilogent Browser"
   },
   "permissions": ["debugger", "tabs", "tabGroups", "storage", "alarms", "idle"],
   "host_permissions": ["<all_urls>"]

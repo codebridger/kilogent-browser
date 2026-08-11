@@ -1,6 +1,6 @@
 // The two-level blocklist, level 2 — and the level that actually decides.
 //
-// One list lives in Lumi, set by a captain, and arrives on `session_open`. The other lives here,
+// One list lives in Kilogent, set by a captain, and arrives on `session_open`. The other lives here,
 // on the machine of the person whose browser this is, and is edited in the popup. THE EFFECTIVE
 // POLICY IS THE UNION, so a captain can only ever ADD to what the owner has chosen to block. That
 // asymmetry is what "the extension's list wins" means, and it is the only version of it that is
@@ -8,7 +8,7 @@
 //
 // MATCHED ON EXACT ORIGIN, never a prefix or a substring. `https://bank.com.evil.com` merely
 // BEGINS with something familiar, and a prefix match would hand it the exemption. This has to
-// agree with Crew's `isOriginBlocked` exactly, and `scripts/lumi-contract-harness.mjs` asserts it
+// agree with Crew's `isOriginBlocked` exactly, and `scripts/kilogent-contract-harness.mjs` asserts it
 // does against the real published implementation — the two live in different repos with nothing
 // linking them at compile time, so agreement has to be tested rather than assumed.
 //

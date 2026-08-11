@@ -1,4 +1,4 @@
-// The popup: sign in to Lumi, choose which workspaces this browser is offered to, keep a private
+// The popup: sign in to Kilogent, choose which workspaces this browser is offered to, keep a private
 // blocklist — and, behind a disclosure, the original self-hosted bridge profiles.
 //
 // SIGN-IN RUNS HERE, NOT IN THE SERVICE WORKER, and that is a deliberate division. The device flow
@@ -8,13 +8,13 @@
 // expires on its own and nothing is left behind.
 //
 // WHAT THIS SCREEN CANNOT DO is as important as what it can. It cannot share the browser and it
-// cannot grant an agent permission: both live in Lumi, on the workspace's own Settings page, and
+// cannot grant an agent permission: both live in Kilogent, on the workspace's own Settings page, and
 // both belong to this person there rather than here. Duplicating them into the popup would make
 // the extension look like the place where access is decided, which it is not.
-import { KEYS, resolveEndpoint } from "./src/lumi-config.js";
-import { callFunction, startLogin } from "./src/lumi-auth.js";
-import { listMyShips } from "./src/lumi-api.js";
-import { parseOwnEntry } from "./src/lumi-blocklist.js";
+import { KEYS, resolveEndpoint } from "./src/kilogent-config.js";
+import { callFunction, startLogin } from "./src/kilogent-auth.js";
+import { listMyShips } from "./src/kilogent-api.js";
+import { parseOwnEntry } from "./src/kilogent-blocklist.js";
 
 const $ = (id) => document.getElementById(id);
 const show = (el, on) => el.classList.toggle("hidden", !on);
@@ -28,7 +28,7 @@ const STATE_UI = {
   unauthorized: { cls: "err", text: "Refused — sign in again" },
 };
 
-let snapshot = { bridges: [], lumi: null, session: null, ships: [], lastError: "" };
+let snapshot = { bridges: [], kilogent: null, session: null, ships: [], lastError: "" };
 let ships = [];
 let chosen = new Set();
 let blocklist = [];
@@ -70,11 +70,11 @@ function render() {
   show($("signedIn"), signedIn && !signingIn);
 
   if (signedIn) {
-    const ui = STATE_UI[snapshot.lumi?.connState] || STATE_UI.connecting;
+    const ui = STATE_UI[snapshot.kilogent?.connState] || STATE_UI.connecting;
     $("dot").className = `dot ${ui.cls}`;
     let text = ui.text;
-    if (snapshot.lumi?.connState === "connected") {
-      const n = snapshot.lumi.tabCount;
+    if (snapshot.kilogent?.connState === "connected") {
+      const n = snapshot.kilogent.tabCount;
       text += n ? ` · ${n} tab${n === 1 ? "" : "s"} in use` : " · idle";
     }
     $("stateText").textContent = text;
@@ -268,7 +268,7 @@ function renderBridges() {
   if (profiles.length === 0) {
     const empty = document.createElement("div");
     empty.className = "empty";
-    empty.textContent = "No bridges. The Lumi connection above needs none.";
+    empty.textContent = "No bridges. The Kilogent connection above needs none.";
     list.appendChild(empty);
     return;
   }

@@ -1,7 +1,7 @@
-// Automated Lumi-mode harness — no Chrome, no Firebase, no VM.
+// Automated Kilogent-mode harness — no Chrome, no Firebase, no VM.
 //
-// WHY THIS EXISTS AT ALL. The extension's Lumi half talks to a server that lives in a DIFFERENT,
-// private repository, so nothing links the two ends at compile time: `src/lumi-connection.js` here
+// WHY THIS EXISTS AT ALL. The extension's Kilogent half talks to a server that lives in a DIFFERENT,
+// private repository, so nothing links the two ends at compile time: `src/kilogent-connection.js` here
 // and `packages/crew/relay/src/protocol.ts` there are two hand-written descriptions of one wire
 // format. That is exactly the shape of bug that passes every test on both sides — each checks its
 // own belief — and it is how every 0.3.0 runner login broke. So this harness runs the REAL relay,
@@ -10,7 +10,7 @@
 //
 // Wiring:
 //   • a REAL relay (`startRelay` on port 0) with a REAL ticket key
-//   • a REAL LumiConnection + the REAL Executor over a mocked `chrome.*`
+//   • a REAL KilogentConnection + the REAL Executor over a mocked `chrome.*`
 //   • tickets minted with the relay's OWN `mintRelayTicket`, standing in for Crew
 //   • commands driven through the relay's REAL control plane over HTTP
 //
@@ -20,11 +20,21 @@
 // tabs and nobody else's.
 import { setTimeout as sleep } from "node:timers/promises";
 import { WebSocket as WsWebSocket } from "ws";
+// ⚠️ THESE TWO REACH INTO THE RELAY'S BUILD OUTPUT BY PATH, and nothing checks that the paths
+// still exist — not npm, not a type-checker. They are correct for `@lumi.ai/relay@0.1.2`, which
+// this repo pins.
+//
+// The relay has ALREADY moved `ticket.js` to `dist/providers/ticket/ticket.js` upstream, as part of
+// making its authentication pluggable. So the next published relay breaks the second line here.
+// Two things follow, and they are the whole reason this note exists:
+//   • that release must be a MINOR bump (0.2.0), never a patch — `^0.1.2` would silently take a
+//     0.1.3 and this harness would fail on an import, in a repo whose CI is not watching the relay;
+//   • when you take it, bump the dependency and fix the path IN THE SAME COMMIT.
 import { startRelay } from "@lumi.ai/relay/dist/server.js";
 import { mintRelayTicket } from "@lumi.ai/relay/dist/ticket.js";
 import { Executor } from "../packages/extension/src/executor.js";
-import { LumiConnection } from "../packages/extension/src/lumi-connection.js";
-import { effectiveBlocklist, isBlocked } from "../packages/extension/src/lumi-blocklist.js";
+import { KilogentConnection } from "../packages/extension/src/kilogent-connection.js";
+import { effectiveBlocklist, isBlocked } from "../packages/extension/src/kilogent-blocklist.js";
 
 // connection code reads WebSocket.OPEN/CONNECTING off the global; point it at `ws` in Node.
 globalThis.WebSocket = WsWebSocket;
@@ -77,7 +87,7 @@ globalThis.chrome = {
     detach: (_t, cb) => cb?.(),
     sendCommand: (target, method, params, cb) => {
       // Enough CDP to make navigate/snapshot/screenshot resolve. The CDP layer itself is covered
-      // by the existing harnesses; what is under test here is the Lumi transport around it.
+      // by the existing harnesses; what is under test here is the Kilogent transport around it.
       if (method === "Page.navigate") {
         const t = tabs.get(target.tabId);
         if (t && params?.url) t.url = params.url;
@@ -121,7 +131,7 @@ async function waitFor(predicate, ms = 5000, label = "condition") {
 }
 
 async function main() {
-  console.log("=== Lumi mode: the extension against a REAL relay ===");
+  console.log("=== Kilogent mode: the extension against a REAL relay ===");
 
   const relay = await startRelay({
     port: 0,
@@ -140,7 +150,7 @@ async function main() {
 
   // Stands in for Crew's `mintBrowserRelayTicket`, using the relay's OWN minting code — which is
   // the point: a ticket this harness makes is byte-identical in shape to one Crew makes, because
-  // `check-browser-ticket-parity.mjs` in the Lumi repo holds those two implementations together.
+  // `check-browser-ticket-parity.mjs` in the Kilogent repo holds those two implementations together.
   let mintCount = 0;
   let mintTicketTtlMs = null;
   const mintTicket = async () => {
@@ -156,7 +166,7 @@ async function main() {
   };
 
   let ownBlocklist = [];
-  const conn = new LumiConnection(
+  const conn = new KilogentConnection(
     {
       browserId: BROWSER_ID,
       label: "Harness MacBook",
@@ -297,7 +307,7 @@ async function main() {
   conn.teardown();
   await relay.close(200);
 
-  console.log(failures === 0 ? "\n✅ lumi harness passed" : `\n❌ ${failures} failed`);
+  console.log(failures === 0 ? "\n✅ kilogent harness passed" : `\n❌ ${failures} failed`);
   process.exit(failures === 0 ? 0 : 1);
 }
 
