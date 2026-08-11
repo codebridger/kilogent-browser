@@ -1,69 +1,67 @@
-// MV3 service worker. Holds one live bridge connection PER PROFILE (each an
-// Agent URL + token you can toggle on/off in the popup). Each connection dials
-// its bridge over wss://, authenticates with the profile's token, and serves
-// browser commands via its OWN Executor (chrome.debugger) — so tabs are isolated
-// per profile.
+// MV3 service worker. Chrome's plumbing, and nothing else.
 //
-// Keepalive (the make-or-break MV3 piece): each bridge sends an app-level
-// {t:"ping"} every ~20s; each inbound WS frame fires an SW event and resets MV3's
-// ~30s idle timer, keeping the worker resident while the Aso window is unfocused.
-// A 1-minute chrome.alarm reconciles connections (revival backstop) if the worker
-// is ever evicted. All connection state is rebuilt on cold start from the stored
-// profile list.
-import { Executor } from "./executor.js";
-import { ConnectionManager } from "./connection.js";
+// Every Chrome API this extension uses is registered here and immediately handed to the transport
+// registry, which decides what actually happens. That split is deliberate and it is what makes a
+// fork viable: a build that adds its own way of reaching an agent writes a directory under
+// `providers/` and one line in `providers/index.js`, and this file stays exactly as upstream wrote
+// it. It is also why this file is barely testable and does not need to be — there is no decision
+// left in it. The decisions are in `providers/registry.js`, which has no Chrome API in it and is
+// covered by `scripts/registry-test.mjs`.
+//
+// Keepalive (the make-or-break MV3 piece): each connection's server sends an app-level
+// `{t:"ping"}` every ~20s; each inbound WS frame fires a service-worker event and resets MV3's
+// ~30s idle timer, keeping the worker resident while its window is unfocused. A 1-minute
+// `chrome.alarms` reconciles connections as a revival backstop if the worker is evicted anyway.
+// All connection state is rebuilt on cold start from storage — nothing here survives eviction, and
+// nothing is expected to.
 
-const manager = new ConnectionManager({
-  WebSocketCtor: WebSocket,
-  makeExecutor: (pushStatus, label) => new Executor(pushStatus, label),
-  onStateChange: () => {},
-  log: (...a) => console.log(...a),
-});
+import { TransportRegistry } from "./providers/registry.js";
+import { TRANSPORTS } from "./providers/index.js";
+
+const log = (...a) => console.log(...a);
+
+const registry = new TransportRegistry(
+  TRANSPORTS.map((make) =>
+    make({
+      // Injected rather than reached for, so a transport is loadable outside a browser and the
+      // registry's own test needs no Chrome shim.
+      storage: chrome.storage.local,
+      WebSocketCtor: WebSocket,
+      log,
+    })
+  ),
+  { log }
+);
 
 // ── top-level registration (re-runs on every cold start) ──────────────────────
 chrome.alarms.create("keepalive", { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener((a) => {
-  if (a.name === "keepalive") reconcile();
+  if (a.name === "keepalive") void registry.reconcile();
 });
-chrome.runtime.onStartup.addListener(reconcile);
-chrome.runtime.onInstalled.addListener(reconcile);
-chrome.debugger.onDetach.addListener((source, reason) => manager.onDetach(source, reason));
-chrome.tabs.onRemoved.addListener((tabId) => manager.onTabRemoved(tabId));
+chrome.runtime.onStartup.addListener(() => void registry.reconcile());
+chrome.runtime.onInstalled.addListener(() => void registry.reconcile());
+chrome.debugger.onDetach.addListener((source, reason) => registry.onDetach(source, reason));
+chrome.tabs.onRemoved.addListener((tabId) => registry.onTabRemoved(tabId));
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg && msg.type === "getStatus") {
-    sendResponse(manager.statusSnapshot());
-    return true;
-  }
-  if (msg && msg.type === "saveProfiles") {
-    chrome.storage.local
-      .set({ profiles: msg.profiles })
-      .then(() => reconcile())
-      .then(() => sendResponse({ ok: true }));
-    return true;
-  }
-  if (msg && msg.type === "reconnect") {
-    manager.reconnectAll();
-    sendResponse({ ok: true });
-    return true;
-  }
-  return false;
+  // `true` keeps the message channel open for an async reply, and MUST be returned synchronously —
+  // so the work is started and `true` returned before any await. Returning `false` for a message
+  // nobody claimed is what stops Chrome waiting for a reply that will never come.
+  let claimed = false;
+  registry
+    .onMessage(msg)
+    .then((outcome) => {
+      claimed = outcome.handled;
+      if (outcome.handled) sendResponse(outcome.response);
+    })
+    .catch((err) => {
+      log("[sw] message handling failed:", err);
+      sendResponse({ ok: false, error: String(err?.message ?? err) });
+    });
+  // We cannot know synchronously whether a transport will claim it, so we always hold the channel.
+  // An unclaimed message resolves with `handled: false`, nothing is sent, and the port closes.
+  void claimed;
+  return true;
 });
 
-reconcile();
-
-// ── profiles ──────────────────────────────────────────────────────────────────
-/** Load the profile list, migrating the legacy single {agentUrl,accessToken}. */
-async function loadProfiles() {
-  const store = await chrome.storage.local.get(["profiles", "agentUrl", "accessToken"]);
-  if (Array.isArray(store.profiles)) return store.profiles;
-  const profiles = store.agentUrl
-    ? [{ id: crypto.randomUUID(), name: "Default", agentUrl: store.agentUrl, accessToken: store.accessToken || "", enabled: true }]
-    : [];
-  await chrome.storage.local.set({ profiles });
-  return profiles;
-}
-
-async function reconcile() {
-  manager.reconcile(await loadProfiles());
-}
+void registry.reconcile();
