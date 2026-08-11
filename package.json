@@ -17,9 +17,11 @@
     "install:all": "npm install --workspaces",
     "test:snapshot": "node scripts/snapshot-narrow-test.mjs",
     "test:select": "node scripts/select-option-test.mjs",
-    "test:registry": "node scripts/registry-test.mjs"
+    "test:registry": "node scripts/registry-test.mjs",
+    "test:popup": "node scripts/popup-test.mjs"
   },
   "devDependencies": {
+    "happy-dom": "^20.11.2",
     "ws": "^8.21.3"
   }
 }

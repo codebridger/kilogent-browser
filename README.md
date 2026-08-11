@@ -77,16 +77,26 @@ packages/extension/src/
   executor.js              CDP. Core.
   page-scripts.js          what runs inside the page. Core.
   connection.js            one WebSocket to one bridge. Core.
+  popup.js / popup.html    the popup SHELL. Never edit these in a fork either.
   providers/
-    registry.js            the fan-out. Core.
-    index.js               ← the one line a fork adds
-    bridge/                the self-hosted transport
+    registry.js            the worker's fan-out. Core.
+    panels.js              ← one line a fork adds (the popup)
+    index.js               ← one line a fork adds (the worker)
+    bridge/
+      index.js             the self-hosted transport
+      popup.js             its panel
     <yours>/               ← the directory a fork adds
 ```
 
+There are TWO registration points, and they are separate on purpose: `providers/index.js` lists
+TRANSPORTS for the service worker, `providers/panels.js` lists PANELS for the popup. One list would
+drag the CDP driver into a window that only draws buttons, on every popup open.
+
 A transport is a plain object with optional methods — `reconcile`, `onDetach`, `onTabRemoved`,
-`status`, `onMessage`, `reconnectAll`, `teardown`. `registry.js` documents the shape. Two rules
-make it work:
+`status`, `onMessage`, `reconnectAll`, `teardown`. A panel has `name`, `mount(root)` and
+`render(snapshot)`, and **owns its own markup**: the shell hands it an empty `<section>` and
+`popup.html` stays core. `registry.js` and `panels.js` document both shapes. Two rules make it
+work:
 
 - **Return `undefined` from `onMessage` for anything that is not yours.** The first transport to
   return anything else claims the message and the rest never see it, because Chrome allows exactly
@@ -98,8 +108,8 @@ One transport cannot break another: every call is isolated, so a half-finished t
 transport that does not work rather than an extension that does not work. `npm run test:registry`
 covers that, among other things.
 
-**A fork should never need to touch `sw.js`, `executor.js`, `page-scripts.js` or `connection.js`.**
-That is what keeps `git merge upstream/main` clean. If the seam will not stretch far enough for
+**A fork should never need to touch `sw.js`, `popup.js`, `popup.html`, `executor.js`,
+`page-scripts.js` or `connection.js`.** That is what keeps `git merge upstream/main` clean. If the seam will not stretch far enough for
 what you are building, open an issue — it is young and it is meant to move.
 
 ## Browser tools
@@ -177,6 +187,7 @@ npm run smoke --workspace=packages/agent
 npm run test:mock        # bridge round-trip against a fake-extension WS client
 npm run test:profiles    # multi-profile / multi-session harness
 npm run test:registry    # the extension's transport fan-out, plus the real bridge transport
+npm run test:popup       # the popup shell and its panels, against a real DOM
 npm run test:snapshot    # browser_snapshot's find/ref narrowing, against the real page script
 npm run test:select      # browser_select_option, against the real page script
 npm run build --workspaces
