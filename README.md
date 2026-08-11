@@ -69,9 +69,13 @@ Browser tool names **mirror the official [Playwright MCP](https://github.com/mic
 
 All exposed on the one bridge MCP endpoint, mirroring Playwright MCP names:
 
-`browser_navigate` · `browser_snapshot` · `browser_click` · `browser_type` · `browser_press_key` · `browser_take_screenshot` · `browser_wait_for` · `browser_tab_list` · `browser_tab_new` · `browser_tab_select` · `browser_tab_close` · `check_local_status` · `bridge_ping`
+`browser_navigate` · `browser_snapshot` · `browser_click` · `browser_type` · `browser_select_option` · `browser_press_key` · `browser_take_screenshot` · `browser_wait_for` · `browser_tab_list` · `browser_tab_new` · `browser_tab_select` · `browser_tab_close` · `check_local_status` · `bridge_ping`
 
 `browser_snapshot` returns an accessibility tree whose interactable elements are tagged with `[ref=eNN]` ids; you pass those refs to `browser_click` / `browser_type`. Refs are only valid for that tab's latest snapshot, so re-snapshot after navigation or DOM changes.
+
+Two arguments keep a big page from costing a whole snapshot: `find` returns only the lines containing some text, and `ref` returns only one element's line. Both filter what comes **back**, not what is reachable — every element still gets a ref, so one you were not shown still works. A miss says how big the page was, so an empty answer never looks like an empty page.
+
+`browser_select_option` is for a real `<select>` only. It sets the property and fires `input` + `change`, because the list a `<select>` opens is drawn by the operating system and no synthetic click can reach it. A dropdown a site built out of `<div>`s is not a `<select>` — the tool says so, and that one is clicked like anything else.
 
 ## Prerequisites
 
@@ -135,8 +139,15 @@ npm run smoke --workspace=packages/agent
 ```bash
 npm run test:mock       # bridge round-trip against a fake-extension WS client
 npm run test:profiles   # multi-profile / multi-session harness
+npm run test:snapshot    # browser_read's find/ref narrowing, against the real page script
+npm run test:select      # browser_act's select, against the real page script
 npm run build --workspaces
 ```
+
+The last two need no bridge and no browser: they import the page script's own functions and run
+them against a stub DOM, so a change to matching, or to the events a `<select>` fires, is caught in
+milliseconds. What they cannot see is a real page — CDP, a real framework's own event handling, and
+a dropdown a site drew itself out of `<div>`s. Those still need a browser.
 
 Each package also has `dev` (tsx watch), `start`, and `typecheck` scripts.
 
