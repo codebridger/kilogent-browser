@@ -159,3 +159,11 @@ Each package also has `dev` (tsx watch), `start`, and `typecheck` scripts.
 - **Sessions are mandatory.** Every call is routed to the tab group its MCP session owns, so a request that names no session is refused rather than being run against a shared "default".
 - **The extension is the trust boundary.** It can drive any tab in its profile via `chrome.debugger`; keep it in a dedicated profile with only the accounts the agent needs.
 - **Keepalive is the known risk.** MV3 evicts idle service workers; the WS heartbeat keeps it resident and a 1-minute `chrome.alarms` revives it, re-attaching `chrome.debugger` lazily on the next command.
+
+## License
+
+[Apache-2.0](LICENSE). Use it, change it, sell it, fork it and ship your own build.
+
+The one thing the licence does not give you is the **name**. Section 6 grants no rights to trade names, trademarks or product names, beyond describing where the code came from. So a fork is free to exist and free to be commercial, and must not present itself as this project. That is on purpose: it means customising is a fork, not a plugin system built to keep branding out of your hands.
+
+This repo asks you to trust it with a logged-in browser. Reading it before you install it is the point, and a licence is what makes reading it useful.
