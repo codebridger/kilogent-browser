@@ -1,6 +1,7 @@
 {
   "name": "@remote-browser-mcp/bridge-server",
   "version": "0.1.0",
+  "license": "Apache-2.0",
   "description": "VM-side bridge: MCP browser tools <-> WebSocket to the Aso Dara MV3 extension",
   "type": "module",
   "main": "dist/index.js",

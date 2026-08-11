@@ -44,8 +44,18 @@ export const BROWSER_TOOLS: BridgeTool[] = [
     description:
       "Capture an accessibility snapshot of a tab as text. Interactable elements are " +
       "tagged with [ref=eNN] ids you pass to browser_click / browser_type. Refs are only " +
-      "valid for the latest snapshot OF THAT TAB — re-snapshot after navigation or DOM changes.",
-    schema: { ...tabArg },
+      "valid for the latest snapshot OF THAT TAB — re-snapshot after navigation or DOM changes. " +
+      "Pass `find` or `ref` to read one part of a large page instead of all of it.",
+    schema: {
+      // Narrowing filters what comes BACK, never what is reachable: every element still gets a
+      // ref, so one you were not shown still works. `ref` wins if both are given.
+      find: z
+        .string()
+        .optional()
+        .describe("Only return lines containing this text (case-insensitive). Says how many of how many matched."),
+      ref: z.string().optional().describe("Only return this one element's line"),
+      ...tabArg,
+    },
     timeoutMs: 30_000,
   },
   {
@@ -76,6 +86,22 @@ export const BROWSER_TOOLS: BridgeTool[] = [
         .boolean()
         .optional()
         .describe("Append to existing content instead of replacing it (default: replace)"),
+      ...tabArg,
+    },
+    timeoutMs: 30_000,
+  },
+  {
+    name: "browser_select_option",
+    description:
+      "Choose an option in a native <select> dropdown. Give the option's visible text; an exact " +
+      "match wins over a substring, and a substring matching two options is refused by name. " +
+      "A dropdown a site drew itself out of <div>s is NOT a <select> — click it, take a fresh " +
+      "snapshot, then click the option.",
+    // No `element` arg, unlike click and type: those pass it only so the extension's overlay can
+    // caption what is happening, and this action captions itself with the chosen value.
+    schema: {
+      ref: z.string().describe("The <select>'s [ref=eNN] id from the latest snapshot"),
+      value: z.string().describe("The option's visible text (its value attribute also matches)"),
       ...tabArg,
     },
     timeoutMs: 30_000,

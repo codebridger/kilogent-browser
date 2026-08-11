@@ -65,13 +65,54 @@ Browser tool names **mirror the official [Playwright MCP](https://github.com/mic
 | [`packages/agent`](packages/agent) | A standalone terminal agent — a stand-in for the VM's real client. Connects to the bridge and runs a tool-use loop. LLM is pluggable ([`src/llm`](packages/agent/src/llm)) — **Gemini** by default, Anthropic optional — with a no-API-key `smoke` test. |
 | [`packages/daemon`](packages/daemon) | Legacy local MCP sidecar (presence + session notifications) from the pre-bridge architecture. Kept for reference; superseded by the bridge. |
 
+## Adding your own transport
+
+The extension ships one way of reaching an agent — the self-hosted `bridge` above. A product that
+wants its own (its own sign-in, its own server, its own rules about who may drive a browser) adds
+a **transport** rather than editing the worker.
+
+```
+packages/extension/src/
+  sw.js                    Chrome's plumbing, and nothing else. Never edit this in a fork.
+  executor.js              CDP. Core.
+  page-scripts.js          what runs inside the page. Core.
+  connection.js            one WebSocket to one bridge. Core.
+  providers/
+    registry.js            the fan-out. Core.
+    index.js               ← the one line a fork adds
+    bridge/                the self-hosted transport
+    <yours>/               ← the directory a fork adds
+```
+
+A transport is a plain object with optional methods — `reconcile`, `onDetach`, `onTabRemoved`,
+`status`, `onMessage`, `reconnectAll`, `teardown`. `registry.js` documents the shape. Two rules
+make it work:
+
+- **Return `undefined` from `onMessage` for anything that is not yours.** The first transport to
+  return anything else claims the message and the rest never see it, because Chrome allows exactly
+  one reply.
+- **Contribute a `status()` that does not collide.** The keys are shallow-merged, and `profiles`
+  already belongs to the bridge.
+
+One transport cannot break another: every call is isolated, so a half-finished transport is a
+transport that does not work rather than an extension that does not work. `npm run test:registry`
+covers that, among other things.
+
+**A fork should never need to touch `sw.js`, `executor.js`, `page-scripts.js` or `connection.js`.**
+That is what keeps `git merge upstream/main` clean. If the seam will not stretch far enough for
+what you are building, open an issue — it is young and it is meant to move.
+
 ## Browser tools
 
 All exposed on the one bridge MCP endpoint, mirroring Playwright MCP names:
 
-`browser_navigate` · `browser_snapshot` · `browser_click` · `browser_type` · `browser_press_key` · `browser_take_screenshot` · `browser_wait_for` · `browser_tab_list` · `browser_tab_new` · `browser_tab_select` · `browser_tab_close` · `check_local_status` · `bridge_ping`
+`browser_navigate` · `browser_snapshot` · `browser_click` · `browser_type` · `browser_select_option` · `browser_press_key` · `browser_take_screenshot` · `browser_wait_for` · `browser_tab_list` · `browser_tab_new` · `browser_tab_select` · `browser_tab_close` · `check_local_status` · `bridge_ping`
 
 `browser_snapshot` returns an accessibility tree whose interactable elements are tagged with `[ref=eNN]` ids; you pass those refs to `browser_click` / `browser_type`. Refs are only valid for that tab's latest snapshot, so re-snapshot after navigation or DOM changes.
+
+Two arguments keep a big page from costing a whole snapshot: `find` returns only the lines containing some text, and `ref` returns only one element's line. Both filter what comes **back**, not what is reachable — every element still gets a ref, so one you were not shown still works. A miss says how big the page was, so an empty answer never looks like an empty page.
+
+`browser_select_option` is for a real `<select>` only. It sets the property and fires `input` + `change`, because the list a `<select>` opens is drawn by the operating system and no synthetic click can reach it. A dropdown a site built out of `<div>`s is not a `<select>` — the tool says so, and that one is clicked like anything else.
 
 ## Prerequisites
 
@@ -133,10 +174,22 @@ npm run smoke --workspace=packages/agent
 ## Development
 
 ```bash
-npm run test:mock       # bridge round-trip against a fake-extension WS client
-npm run test:profiles   # multi-profile / multi-session harness
+npm run test:mock        # bridge round-trip against a fake-extension WS client
+npm run test:profiles    # multi-profile / multi-session harness
+npm run test:registry    # the extension's transport fan-out, plus the real bridge transport
+npm run test:snapshot    # browser_snapshot's find/ref narrowing, against the real page script
+npm run test:select      # browser_select_option, against the real page script
 npm run build --workspaces
 ```
+
+The last three need no bridge and no browser. `test:snapshot` and `test:select` import the page
+script's own functions and run them against a stub DOM, so a change to matching, or to the events a
+`<select>` fires, is caught in milliseconds. `test:registry` drives the service worker's fan-out
+with fake transports and then with the real one.
+
+What none of them can see is a real page: CDP, a real framework's own event handling, and a
+dropdown a site drew itself out of `<div>`s. **Loading the extension in Chrome is part of the loop,
+not an optional extra.**
 
 Each package also has `dev` (tsx watch), `start`, and `typecheck` scripts.
 
@@ -148,3 +201,11 @@ Each package also has `dev` (tsx watch), `start`, and `typecheck` scripts.
 - **Sessions are mandatory.** Every call is routed to the tab group its MCP session owns, so a request that names no session is refused rather than being run against a shared "default".
 - **The extension is the trust boundary.** It can drive any tab in its profile via `chrome.debugger`; keep it in a dedicated profile with only the accounts the agent needs.
 - **Keepalive is the known risk.** MV3 evicts idle service workers; the WS heartbeat keeps it resident and a 1-minute `chrome.alarms` revives it, re-attaching `chrome.debugger` lazily on the next command.
+
+## License
+
+[Apache-2.0](LICENSE). Use it, change it, sell it, fork it and ship your own build.
+
+The one thing the licence does not give you is the **name**. Section 6 grants no rights to trade names, trademarks or product names, beyond describing where the code came from. So a fork is free to exist and free to be commercial, and must not present itself as this project. That is on purpose: it means customising is a fork, not a plugin system built to keep branding out of your hands.
+
+This repo asks you to trust it with a logged-in browser. Reading it before you install it is the point, and a licence is what makes reading it useful.

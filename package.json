@@ -2,6 +2,7 @@
   "name": "remote-browser-mcp",
   "version": "0.1.0",
   "private": true,
+  "license": "Apache-2.0",
   "workspaces": [
     "packages/*"
   ],
@@ -16,7 +17,8 @@
     "install:all": "npm install --workspaces",
     "test:lumi": "node scripts/lumi-harness.mjs",
     "test:snapshot": "node scripts/snapshot-narrow-test.mjs",
-    "test:select": "node scripts/select-option-test.mjs"
+    "test:select": "node scripts/select-option-test.mjs",
+    "test:registry": "node scripts/registry-test.mjs"
   },
   "devDependencies": {
     "@lumi.ai/relay": "^0.1.2",

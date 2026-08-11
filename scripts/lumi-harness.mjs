@@ -23,8 +23,8 @@ import { WebSocket as WsWebSocket } from "ws";
 import { startRelay } from "@lumi.ai/relay/dist/server.js";
 import { mintRelayTicket } from "@lumi.ai/relay/dist/ticket.js";
 import { Executor } from "../packages/extension/src/executor.js";
-import { LumiConnection } from "../packages/extension/src/lumi-connection.js";
-import { effectiveBlocklist, isBlocked } from "../packages/extension/src/lumi-blocklist.js";
+import { LumiConnection } from "../packages/extension/src/providers/lumi/connection.js";
+import { effectiveBlocklist, isBlocked } from "../packages/extension/src/providers/lumi/blocklist.js";
 
 // connection code reads WebSocket.OPEN/CONNECTING off the global; point it at `ws` in Node.
 globalThis.WebSocket = WsWebSocket;

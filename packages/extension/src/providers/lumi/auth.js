@@ -15,7 +15,7 @@
 // NOTHING HERE GRANTS ACCESS TO ANYTHING. A Lumi session lets this browser offer itself; whether
 // an agent may drive it is three separate locks held by other people, re-checked per call.
 
-import { KEYS, resolveEndpoint } from "./lumi-config.js";
+import { KEYS, resolveEndpoint } from "./config.js";
 
 /** Refresh this far before expiry. One minute is the alarm period, so five gives four attempts. */
 const REFRESH_SKEW_MS = 5 * 60 * 1000;

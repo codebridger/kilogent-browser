@@ -28,7 +28,9 @@ const STATE_UI = {
   unauthorized: { cls: "err", text: "Refused — sign in again" },
 };
 
-let snapshot = { bridges: [], lumi: null, session: null, ships: [], lastError: "" };
+// `profiles`, not `bridges`: the status snapshot is now merged from every transport, and the
+// bridge transport contributes the key it has always used. See providers/registry.js.
+let snapshot = { profiles: [], lumi: null, session: null, ships: [], lastError: "" };
 let ships = [];
 let chosen = new Set();
 let blocklist = [];
@@ -263,7 +265,7 @@ async function loadProfiles() {
 function renderBridges() {
   const list = $("profiles");
   if (!list) return;
-  const byId = new Map((snapshot.bridges || []).map((p) => [p.id, p]));
+  const byId = new Map((snapshot.profiles || []).map((p) => [p.id, p]));
   list.textContent = "";
   if (profiles.length === 0) {
     const empty = document.createElement("div");
