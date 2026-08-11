@@ -27,18 +27,23 @@ Everything Kilogent-specific lives in files named `kilogent-*`:
 | `packages/extension/src/kilogent-config.js` | the one URL compiled in, and the storage keys |
 
 **The rule that keeps this fork alive: never edit the core.** `executor.js`, `page-scripts.js`
-and `connection.js` come from upstream untouched, so `git pull upstream main` stays clean. A fix
+and `connection.js` come from upstream untouched, so `git merge upstream/main` stays clean. A fix
 that belongs to everybody goes upstream as a pull request and comes back down; only branding and
 the Kilogent transport are ours.
 
 ```bash
 git remote add upstream https://github.com/navidshad/remote-browser-mcp.git
-git pull upstream main
+git fetch upstream && git merge upstream/main
 ```
 
 ⚠️ `sw.js` and `popup.js` are the two files that do NOT yet obey that rule — Kilogent's transport
 was written into them in place rather than beside them, so they will conflict on every upstream
-pull until the core/provider split lands. That split is the next piece of work.
+merge until the core/provider split lands. That split is the next piece of work.
+
+📖 **[MAINTAINING.md](MAINTAINING.md)** is the guide for both jobs: the full update loop (including
+which files conflict and how to resolve them), and the complete inventory of what a rebrand touches
+— written from the real Lumi → Kilogent rename, so the three traps in it are ones that actually
+happened rather than ones that might.
 
 ## Running it against your own server instead
 
