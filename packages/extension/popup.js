@@ -1,391 +1,83 @@
-// The popup: sign in to Kilogent, choose which workspaces this browser is offered to, keep a private
-// blocklist — and, behind a disclosure, the original self-hosted bridge profiles.
+// Popup: the shell, and nothing panel-specific.
 //
-// SIGN-IN RUNS HERE, NOT IN THE SERVICE WORKER, and that is a deliberate division. The device flow
-// is a ten-minute human round-trip; a worker that has to stay alive across it is a worker that
-// will be evicted in the middle of it. The popup owns the polling loop and hands the finished
-// session over in one message. If the popup closes, the sign-in is simply abandoned — the code
-// expires on its own and nothing is left behind.
+// It creates one `<section>` per registered panel, mounts each, and drives them all from a single
+// status poll. Everything a particular way of connecting needs to show — profiles, sign-in, a
+// workspace list — belongs to that provider's panel under `src/providers/`, so `popup.html` and
+// this file are core and a fork edits neither.
 //
-// WHAT THIS SCREEN CANNOT DO is as important as what it can. It cannot share the browser and it
-// cannot grant an agent permission: both live in Kilogent, on the workspace's own Settings page, and
-// both belong to this person there rather than here. Duplicating them into the popup would make
-// the extension look like the place where access is decided, which it is not.
-import { KEYS, resolveEndpoint } from "./src/kilogent-config.js";
-import { callFunction, startLogin } from "./src/kilogent-auth.js";
-import { listMyShips } from "./src/kilogent-api.js";
-import { parseOwnEntry } from "./src/kilogent-blocklist.js";
+// ONE POLL, NOT ONE PER PANEL. Two panels asking the worker for status on their own timers is two
+// wake-ups of a service worker that is trying to stay evicted, for one answer both of them want.
 
-const $ = (id) => document.getElementById(id);
-const show = (el, on) => el.classList.toggle("hidden", !on);
+import { PANELS } from "./src/providers/panels.js";
 
-const STATE_UI = {
-  init: { cls: "warn", text: "Starting…" },
-  connecting: { cls: "warn", text: "Connecting…" },
-  connected: { cls: "ok", text: "Connected" },
-  disconnected: { cls: "err", text: "Disconnected — retrying…" },
-  signed_out: { cls: "err", text: "Signed out" },
-  unauthorized: { cls: "err", text: "Refused — sign in again" },
+const REFRESH_MS = 1500;
+
+/** Never throws: a popup that dies because the worker was mid-restart is a popup that looks broken
+ *  for the one second it takes to come back. */
+async function send(msg) {
+  try {
+    return await chrome.runtime.sendMessage(msg);
+  } catch {
+    return {};
+  }
+}
+
+const deps = {
+  storage: chrome.storage.local,
+  send,
+  /** Open a URL in a new tab. Injected rather than left to the panel because a panel that reaches
+   *  for `chrome.tabs` directly cannot be loaded outside a browser, and any panel with a sign-in
+   *  flow needs exactly this one call. */
+  openTab: (url) => chrome.tabs.create({ url }),
 };
 
-// `profiles`, not `bridges`: the snapshot is merged from every transport now, and the bridge
-// transport contributes the key it has always used. See providers/registry.js upstream.
-let snapshot = { profiles: [], kilogent: null, session: null, ships: [], lastError: "" };
-let ships = [];
-let chosen = new Set();
-let blocklist = [];
-let signingIn = null;
+const root = document.getElementById("panels");
+const panels = PANELS.map((make) => make(deps));
 
-const send = (msg) => chrome.runtime.sendMessage(msg).catch(() => ({}));
+for (const panel of panels) {
+  const section = document.createElement("section");
+  section.className = "panel";
+  section.dataset.panel = panel.name;
+
+  // A panel may declare itself SECONDARY by exposing a `summary`, and the shell folds it into a
+  // <details>. It lives here rather than in the panel because collapsing is a decision about the
+  // popup as a whole — which of several ways to connect is the ordinary one — and a panel cannot
+  // see the others. A fork expresses it in its own `panels.js`, without editing the panel.
+  if (panel.summary) {
+    const details = document.createElement("details");
+    const summary = document.createElement("summary");
+    summary.textContent = panel.summary;
+    details.appendChild(summary);
+    details.appendChild(section);
+    root.appendChild(details);
+  } else {
+    root.appendChild(section);
+  }
+
+  try {
+    panel.mount(section);
+  } catch (err) {
+    // One panel failing to mount must not leave the others blank — the same isolation the worker's
+    // registry applies, for the same reason.
+    console.error(`[popup] ${panel.name} failed to mount:`, err);
+  }
+}
 
 async function refresh() {
-  snapshot = (await send({ type: "getStatus" })) || snapshot;
-  const store = await chrome.storage.local.get([KEYS.label, KEYS.blocklist, KEYS.pending]);
-  if (document.activeElement !== $("label")) $("label").value = store[KEYS.label] || "";
-  blocklist = Array.isArray(store[KEYS.blocklist]) ? store[KEYS.blocklist] : [];
-  chosen = new Set(snapshot.ships || []);
-
-  // Reopening the popup mid-handshake must show the code again, not the sign-in button. The
-  // handshake lives in storage precisely because the popup is disposable — this is the read side
-  // of that, and without it somebody who closed the popup would start a second login while the
-  // first was still pending.
-  const pending = store[KEYS.pending];
-  if (pending && Date.now() < pending.expiresAt) {
-    signingIn = { started: pending };
-    $("displayCode").textContent = `${pending.userCode.slice(0, 4)}-${pending.userCode.slice(4)}`;
-    $("verifyUrl").textContent = pending.verificationUrl ?? "";
-    const left = Math.max(0, Math.round((pending.expiresAt - Date.now()) / 1000));
-    $("signInState").textContent = `Waiting for approval… ${Math.floor(left / 60)}:${String(
-      left % 60,
-    ).padStart(2, "0")}`;
-  } else if (signingIn && !pending) {
-    // The worker finished (or gave up) while this popup was open.
-    signingIn = null;
-  }
-  render();
-}
-
-function render() {
-  const signedIn = !!snapshot.session;
-  show($("signedOut"), !signedIn && !signingIn);
-  show($("signingIn"), !!signingIn);
-  show($("signedIn"), signedIn && !signingIn);
-
-  if (signedIn) {
-    const ui = STATE_UI[snapshot.kilogent?.connState] || STATE_UI.connecting;
-    $("dot").className = `dot ${ui.cls}`;
-    let text = ui.text;
-    if (snapshot.kilogent?.connState === "connected") {
-      const n = snapshot.kilogent.tabCount;
-      text += n ? ` · ${n} tab${n === 1 ? "" : "s"} in use` : " · idle";
+  const snapshot = await send({ type: "getStatus" });
+  for (const panel of panels) {
+    try {
+      panel.render(snapshot || {});
+    } catch (err) {
+      console.error(`[popup] ${panel.name} failed to render:`, err);
     }
-    $("stateText").textContent = text;
-    $("who").textContent = snapshot.session.email
-      ? `Signed in as ${snapshot.session.email}`
-      : `Signed in as ${snapshot.session.uid}`;
-    renderShips();
-    renderBlocklist();
-    const err = snapshot.lastError || "";
-    $("error").textContent = err;
-    show($("error"), !!err);
-  }
-  renderBridges();
-}
-
-function renderShips() {
-  const list = $("ships");
-  list.textContent = "";
-  if (ships.length === 0) {
-    const p = document.createElement("p");
-    p.className = "empty";
-    p.textContent = "Loading your workspaces…";
-    list.appendChild(p);
-    return;
-  }
-  for (const ship of ships) {
-    const row = document.createElement("div");
-    row.className = `pick${chosen.has(ship.id) ? " on" : ""}`;
-    const box = document.createElement("input");
-    box.type = "checkbox";
-    box.style.width = "auto";
-    box.checked = chosen.has(ship.id);
-    const nm = document.createElement("span");
-    nm.className = "nm";
-    nm.textContent = ship.name || ship.id;
-    row.appendChild(box);
-    row.appendChild(nm);
-    row.addEventListener("click", (e) => {
-      if (e.target !== box) box.checked = !box.checked;
-      if (box.checked) chosen.add(ship.id);
-      else chosen.delete(ship.id);
-      // Removing a workspace here does NOT delete the row over there — that is a captain's or the
-      // owner's act on the Browsers panel, and doing it silently from a checkbox would make the
-      // two screens disagree about what exists. This is only "stop beating for that one".
-      send({ type: "setShips", ships: [...chosen] }).then(refresh);
-    });
-    list.appendChild(row);
   }
 }
 
-function renderBlocklist() {
-  const list = $("blocklist");
-  list.textContent = "";
-  for (const origin of blocklist) {
-    const chip = document.createElement("div");
-    chip.className = "chip";
-    const t = document.createElement("span");
-    t.style.flex = "1";
-    t.textContent = origin;
-    const x = document.createElement("span");
-    x.className = "x";
-    x.textContent = "×";
-    x.title = `Stop blocking ${origin}`;
-    x.addEventListener("click", async () => {
-      blocklist = blocklist.filter((o) => o !== origin);
-      await send({ type: "setBlocklist", blocklist });
-      renderBlocklist();
-    });
-    chip.appendChild(t);
-    chip.appendChild(x);
-    list.appendChild(chip);
-  }
-}
-
-// ── sign-in ───────────────────────────────────────────────────────────────────
-/**
- * Start a handshake and HAND IT TO THE WORKER, which does the polling.
- *
- * The popup cannot poll, and this is not a preference. Chrome destroys an extension popup the
- * instant it loses focus, and the next line here opens the approval tab — which takes focus. A
- * popup that owned the loop would be killed about a millisecond after starting it, the human would
- * approve on the web page, and the extension would sit there signed out forever.
- *
- * So the popup's whole job is: get a code, show it, hand it over, open the tab. Everything after
- * that survives the popup closing, because it is in storage and the worker's alarm re-enters it.
- */
-$("signIn").addEventListener("click", async () => {
-  const store = await chrome.storage.local.get(KEYS.endpoint);
-  const endpoint = resolveEndpoint(store[KEYS.endpoint]);
-  const label = $("label").value.trim() || "This browser";
-  try {
-    const started = await startLogin(endpoint, label);
-    await send({
-      type: "beginLogin",
-      pending: {
-        userCode: started.userCode,
-        deviceCode: started.deviceCode,
-        expiresAt: Date.now() + (started.expiresIn ?? 600) * 1000,
-        // Kept so reopening the popup can still show where to go. The worker never reads it.
-        verificationUrl: started.verificationUrl,
-        label,
-        endpoint,
-      },
-    });
-    signingIn = { started };
-    $("displayCode").textContent = started.displayCode;
-    $("verifyUrl").textContent = started.verificationUrl;
-    $("signInState").textContent = "Waiting for approval…";
-    render();
-    // Last, so the code is on screen before focus leaves — reopening the popup shows it again
-    // anyway, but there is no reason to make somebody go looking for it.
-    chrome.tabs.create({ url: started.verificationUrl });
-  } catch (e) {
-    signingIn = null;
-    $("error").textContent = String(e?.message || e);
-    show($("error"), true);
-    render();
-  }
-});
-
-$("cancelSignIn").addEventListener("click", async () => {
-  await send({ type: "cancelLogin" });
-  signingIn = null;
-  await refresh();
-});
-
-async function loadShips() {
-  if (!snapshot.session) return;
-  const store = await chrome.storage.local.get(KEYS.endpoint);
-  const endpoint = resolveEndpoint(store[KEYS.endpoint]);
-  try {
-    // The popup asks Crew directly rather than through the worker: it already has to be awake,
-    // and a list of workspace names is not worth a message round-trip and a cache to go stale.
-    const session = await chrome.storage.local.get(KEYS.session);
-    const idToken = session[KEYS.session]?.idToken;
-    if (!idToken) return;
-    ships = await listMyShips(callFunction, endpoint, idToken);
-    renderShips();
-  } catch (e) {
-    $("shipsNote").textContent = `Could not list your workspaces: ${e.message}`;
-  }
-}
-
-$("label").addEventListener("change", async () => {
-  await chrome.storage.local.set({ [KEYS.label]: $("label").value.trim() || "This browser" });
-});
-
-$("blockAdd").addEventListener("click", async () => {
-  const parsed = parseOwnEntry($("blockEntry").value);
-  if (!parsed.ok) {
-    $("error").textContent = parsed.message;
-    show($("error"), true);
-    return;
-  }
-  const next = new Set(blocklist);
-  for (const o of parsed.origins) next.add(o);
-  blocklist = [...next].sort();
-  await send({ type: "setBlocklist", blocklist });
-  $("blockEntry").value = "";
-  show($("error"), false);
-  renderBlocklist();
-});
-
-$("reconnect").addEventListener("click", async () => {
+document.getElementById("reconnect").addEventListener("click", async () => {
   await send({ type: "reconnect" });
   setTimeout(refresh, 400);
 });
 
-$("signOut").addEventListener("click", async () => {
-  await send({ type: "signOut" });
-  ships = [];
-  await refresh();
-});
-
-// ── the self-hosted bridge profiles: unchanged behaviour ──────────────────────
-let profiles = [];
-let editingId = null;
-const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random());
-
-async function loadProfiles() {
-  const { profiles: stored } = await chrome.storage.local.get("profiles");
-  profiles = Array.isArray(stored) ? stored : [];
-  renderBridges();
-}
-
-function renderBridges() {
-  const list = $("profiles");
-  if (!list) return;
-  const byId = new Map((snapshot.profiles || []).map((p) => [p.id, p]));
-  list.textContent = "";
-  if (profiles.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "empty";
-    empty.textContent = "No bridges. The Kilogent connection above needs none.";
-    list.appendChild(empty);
-    return;
-  }
-  for (const p of profiles) {
-    const st = byId.get(p.id);
-    const ui = p.enabled
-      ? STATE_UI[st?.connState] || { cls: "warn", text: "Connecting…" }
-      : { cls: "", text: "Off" };
-    const row = document.createElement("div");
-    row.className = "profile";
-
-    const top = document.createElement("div");
-    top.className = "top";
-    const name = document.createElement("div");
-    name.className = "name";
-    name.textContent = (p.blockInput ? "🔒 " : "") + (p.name || "(unnamed)");
-    const sw = document.createElement("label");
-    sw.className = "switch";
-    const cb = document.createElement("input");
-    cb.type = "checkbox";
-    cb.checked = !!p.enabled;
-    cb.addEventListener("change", () => {
-      p.enabled = cb.checked;
-      persistProfiles();
-    });
-    const slider = document.createElement("span");
-    slider.className = "slider";
-    sw.appendChild(cb);
-    sw.appendChild(slider);
-    top.appendChild(name);
-    top.appendChild(sw);
-    row.appendChild(top);
-
-    const url = document.createElement("div");
-    url.className = "url";
-    url.textContent = p.agentUrl || "(no url)";
-    row.appendChild(url);
-
-    const state = document.createElement("div");
-    state.className = "state";
-    const dot = document.createElement("span");
-    dot.className = `dot ${ui.cls}`;
-    const label = document.createElement("span");
-    label.textContent = ui.text;
-    state.appendChild(dot);
-    state.appendChild(label);
-    row.appendChild(state);
-
-    const actions = document.createElement("div");
-    actions.className = "actions";
-    const edit = document.createElement("button");
-    edit.className = "ghost";
-    edit.textContent = "Edit";
-    edit.addEventListener("click", () => openForm(p.id));
-    const del = document.createElement("button");
-    del.className = "ghost";
-    del.textContent = "Delete";
-    del.addEventListener("click", () => {
-      profiles = profiles.filter((x) => x.id !== p.id);
-      if (editingId === p.id) closeForm();
-      persistProfiles();
-    });
-    actions.appendChild(edit);
-    actions.appendChild(del);
-    row.appendChild(actions);
-    list.appendChild(row);
-  }
-}
-
-async function persistProfiles() {
-  await send({ type: "saveProfiles", profiles });
-  await refresh();
-}
-
-function openForm(id) {
-  editingId = id ?? null;
-  const p = id ? profiles.find((x) => x.id === id) : null;
-  $("name").value = p?.name ?? "";
-  $("url").value = p?.agentUrl ?? "";
-  $("token").value = p?.accessToken ?? "";
-  $("blockInput").checked = !!p?.blockInput;
-  show($("form"), true);
-}
-
-function closeForm() {
-  editingId = null;
-  show($("form"), false);
-}
-
-$("add").addEventListener("click", () => openForm(null));
-$("cancel").addEventListener("click", closeForm);
-$("saveProfile").addEventListener("click", () => {
-  const name = $("name").value.trim();
-  const agentUrl = $("url").value.trim();
-  const accessToken = $("token").value.trim();
-  const blockInput = $("blockInput").checked;
-  if (!agentUrl) return $("url").focus();
-  if (editingId) {
-    const p = profiles.find((x) => x.id === editingId);
-    if (p) Object.assign(p, { name, agentUrl, accessToken, blockInput });
-  } else {
-    profiles.push({ id: uuid(), name: name || "Bridge", agentUrl, accessToken, enabled: true, blockInput });
-  }
-  closeForm();
-  persistProfiles();
-});
-
-refresh().then(loadShips);
-loadProfiles();
-setInterval(() => {
-  // Paused during sign-in: re-rendering under a live device code would replace the screen the
-  // person is currently reading a code off.
-  // Refreshes DURING sign-in too, which the previous version deliberately did not. That guard
-  // existed to stop a re-render replacing the code somebody was reading — but the worker owns the
-  // polling now, so refreshing is the only way this screen ever learns the login succeeded, and
-  // `refresh()` re-reads the pending handshake so the code stays put.
-  refresh();
-}, 1500);
+refresh();
+setInterval(refresh, REFRESH_MS);

@@ -64,17 +64,22 @@ optional extra.
 | `src/sw.js`, `src/executor.js`, `src/page-scripts.js`, `src/connection.js` | **never** | byte-identical to upstream — we do not edit core |
 | `src/providers/registry.js`, `src/providers/bridge/` | **never** | same |
 | `src/providers/kilogent/**` | **never** | upstream does not have it |
-| `src/providers/index.js` | **rarely** | we add ONE import and ONE array entry; conflicts only if upstream edits the same two lines |
-| `popup.js`, `popup.html` | **often** | ours are rewritten for the sign-in flow, and the popup has no provider seam yet |
+| `popup.js`, `src/providers/bridge/popup.js` | **never** | byte-identical too — the popup has a seam now |
+| `src/providers/index.js`, `src/providers/panels.js` | **rarely** | we add one import and one entry to each; conflicts only if upstream edits those same lines |
+| `popup.html` | **rarely** | the BODY is upstream's structure; only the heading and the stylesheet are ours |
+| `scripts/popup-test.mjs` | **rarely** | upstream's file with OUR panel's tests appended at the end |
 
-`sw.js` used to conflict on every single merge, because the transport was written INTO it. It no
-longer does: upstream grew a transport seam, our transport moved to `providers/kilogent/`, and the
-worker is now the same file on both sides. Verify that at any time:
+`sw.js` AND `popup.js` used to conflict on every single merge, because the transport and the
+sign-in UI were written INTO them. Neither does now: upstream grew a seam on both sides, ours moved
+into `providers/kilogent/`, and the worker and the popup shell are the same files on both sides.
+Verify that at any time:
 
 ```bash
 git fetch upstream
-for f in sw.js providers/registry.js providers/bridge/index.js executor.js connection.js page-scripts.js; do
-  git diff --quiet upstream/main -- "packages/extension/src/$f" \
+for f in src/sw.js src/providers/registry.js src/providers/bridge/index.js \
+         src/providers/bridge/popup.js src/executor.js src/connection.js \
+         src/page-scripts.js popup.js; do
+  git diff --quiet upstream/main -- "packages/extension/$f" \
     && echo "ok    $f" || echo "EDITED $f  ← a fork must not"
 done
 ```
@@ -87,9 +92,11 @@ transport seam — it is `main` once that is merged.)
 transport too: that it satisfies the registry's shape, and that it does not claim `getStatus` or
 `reconnect`. A fork gets that coverage without writing a line of it.
 
-**The popup is the one that is still ours**, and it is the honest remainder: a branded popup IS the
-brand, and there is no seam for it yet. Resolve it by taking upstream's structural changes and
-keeping our sign-in panel. When upstream grows a popup seam, this row goes too.
+**`popup.html` is the honest remainder**, and it is small. Its body is upstream's structure — same
+element ids, same panel mount point — so a structural change merges. What is ours is the `<h1>`, the
+sub-heading and the stylesheet, which is exactly what a brand IS. If upstream restyles, take theirs
+and re-apply ours; there is no way around that short of a theming system, and one stylesheet is not
+worth building one for.
 
 ### Which changes go upstream instead
 
@@ -117,7 +124,8 @@ point. What follows is the full inventory of what a rebrand touches.
 |---|---|---|
 | 1 | `packages/extension/src/providers/kilogent/` | rename the directory, and the one import in `providers/index.js` |
 | 2 | `packages/extension/manifest.json` | `name`, `description` — this is what Chrome shows |
-| 3 | `packages/extension/popup.html` + `popup.js` | every visible string |
+| 3 | `packages/extension/popup.html` | the heading, the sub-heading and the stylesheet |
+| 3b | `providers/<yourbrand>/popup.js` | every visible string in your panel |
 | 4 | `providers/<yourbrand>/config.js` → `KEYS` | the `chrome.storage` keys |
 | 5 | `providers/<yourbrand>/config.js` → `DEFAULT_FUNCTIONS_BASE` | **your own endpoint** — this one is not cosmetic |
 | 6 | `package.json` | `name` |

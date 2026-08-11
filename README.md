@@ -21,6 +21,7 @@ Everything Kilogent-specific lives in **one directory**, `packages/extension/src
 | File | What it does |
 |---|---|
 | `index.js` | the transport itself — what upstream's registry calls |
+| `popup.js` | the panel — sign-in, workspaces, blocklist |
 | `auth.js` | signing in, and keeping the session alive |
 | `connection.js` | the socket to Kilogent's relay |
 | `api.js` | the browser's own row, written under rules |
@@ -38,13 +39,17 @@ git remote add upstream https://github.com/navidshad/remote-browser-mcp.git
 git fetch upstream && git merge upstream/main
 ```
 
-**`sw.js` no longer conflicts.** It used to, on every single merge, because the transport was
-written into it — 390 lines where upstream had 69. Upstream grew a transport seam, our transport
-moved into the directory above, and the worker is now byte-identical on both sides. Under `src/`,
-this fork's entire divergence is that one directory plus **three lines** of `providers/index.js`.
+**Neither `sw.js` nor `popup.js` conflicts any more.** Both used to, on every merge, because the
+transport and the sign-in UI were written into them — 390 lines where upstream had 69, and 391
+where upstream had 177. Upstream grew a seam on both sides, ours moved into the directory above,
+and the worker and the popup shell are now byte-identical on both sides.
 
-⚠️ `popup.js` and `popup.html` are the honest remainder: ours are rewritten for the sign-in flow and
-the popup has no seam yet, so they still conflict. That is the next piece of work.
+Our whole divergence in code is that one directory, plus one import and one entry in each of
+`providers/index.js` and `providers/panels.js`.
+
+⚠️ `popup.html` is the small remainder. Its body is upstream's structure — same ids, same mount
+point — so a structural change merges; what is ours is the heading and the stylesheet, which is
+what a brand IS. And `manifest.json`, for the same reason.
 
 📖 **[MAINTAINING.md](MAINTAINING.md)** is the guide for both jobs: the full update loop (including
 which files conflict and how to resolve them), and the complete inventory of what a rebrand touches

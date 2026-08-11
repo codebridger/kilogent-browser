@@ -17,11 +17,13 @@
     "test:kilogent": "node scripts/kilogent-harness.mjs",
     "test:snapshot": "node scripts/snapshot-narrow-test.mjs",
     "test:select": "node scripts/select-option-test.mjs",
-    "test:registry": "node scripts/registry-test.mjs"
+    "test:registry": "node scripts/registry-test.mjs",
+    "test:popup": "node scripts/popup-test.mjs"
   },
   "devDependencies": {
     "@lumi.ai/relay": "^0.1.2",
-    "ws": "^8.21.3"
+    "ws": "^8.21.3",
+    "happy-dom": "^20.11.2"
   },
   "license": "Apache-2.0"
 }
