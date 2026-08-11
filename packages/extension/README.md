@@ -68,6 +68,7 @@ Both modes can run at once.
 
 ```
 npm run test:kilogent        # the Kilogent transport, against a REAL relay — no Chrome needed
+npm run test:registry        # the transport seam, including this transport
 npm run test:mock        # the bridge mode's CDP + session model
 npm run test:profiles    # multiple bridges, per-profile tab isolation
 ```

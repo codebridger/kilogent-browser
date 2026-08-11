@@ -1,7 +1,7 @@
 // Automated Kilogent-mode harness — no Chrome, no Firebase, no VM.
 //
 // WHY THIS EXISTS AT ALL. The extension's Kilogent half talks to a server that lives in a DIFFERENT,
-// private repository, so nothing links the two ends at compile time: `src/kilogent-connection.js` here
+// private repository, so nothing links the two ends at compile time: `src/providers/kilogent/connection.js` here
 // and `packages/crew/relay/src/protocol.ts` there are two hand-written descriptions of one wire
 // format. That is exactly the shape of bug that passes every test on both sides — each checks its
 // own belief — and it is how every 0.3.0 runner login broke. So this harness runs the REAL relay,
@@ -33,8 +33,8 @@ import { WebSocket as WsWebSocket } from "ws";
 import { startRelay } from "@lumi.ai/relay/dist/server.js";
 import { mintRelayTicket } from "@lumi.ai/relay/dist/ticket.js";
 import { Executor } from "../packages/extension/src/executor.js";
-import { KilogentConnection } from "../packages/extension/src/kilogent-connection.js";
-import { effectiveBlocklist, isBlocked } from "../packages/extension/src/kilogent-blocklist.js";
+import { KilogentConnection } from "../packages/extension/src/providers/kilogent/connection.js";
+import { effectiveBlocklist, isBlocked } from "../packages/extension/src/providers/kilogent/blocklist.js";
 
 // connection code reads WebSocket.OPEN/CONNECTING off the global; point it at `ws` in Node.
 globalThis.WebSocket = WsWebSocket;

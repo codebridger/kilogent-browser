@@ -16,7 +16,8 @@
     "install:all": "npm install --workspaces",
     "test:kilogent": "node scripts/kilogent-harness.mjs",
     "test:snapshot": "node scripts/snapshot-narrow-test.mjs",
-    "test:select": "node scripts/select-option-test.mjs"
+    "test:select": "node scripts/select-option-test.mjs",
+    "test:registry": "node scripts/registry-test.mjs"
   },
   "devDependencies": {
     "@lumi.ai/relay": "^0.1.2",

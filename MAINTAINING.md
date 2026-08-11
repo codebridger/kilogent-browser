@@ -46,6 +46,7 @@ Then, whether or not there was a conflict:
 ```bash
 npm install
 npm run test:kilogent     # the real relay, end to end — the one that matters
+npm run test:registry     # the transport seam, including OUR transport
 npm run test:snapshot
 npm run test:select
 npm run test:mock
@@ -60,23 +61,35 @@ optional extra.
 
 | File | Conflicts? | Why |
 |---|---|---|
-| `src/executor.js`, `src/page-scripts.js`, `src/connection.js` | **never** | we do not edit them |
-| `src/kilogent-*.js` | **never** | upstream does not have them |
-| `src/sw.js` | **every time** | our transport was written into it, not beside it |
-| `popup.js`, `popup.html` | **often** | same reason |
+| `src/sw.js`, `src/executor.js`, `src/page-scripts.js`, `src/connection.js` | **never** | byte-identical to upstream — we do not edit core |
+| `src/providers/registry.js`, `src/providers/bridge/` | **never** | same |
+| `src/providers/kilogent/**` | **never** | upstream does not have it |
+| `src/providers/index.js` | **rarely** | we add ONE import and ONE array entry; conflicts only if upstream edits the same two lines |
+| `popup.js`, `popup.html` | **often** | ours are rewritten for the sign-in flow, and the popup has no provider seam yet |
 
-For the two that conflict, the resolution is always the same shape: **take upstream's version, then
-put our branded lines back.** There are about 36 in `sw.js` and about 11 in `popup.js`, and they are
-all findable with one search:
+`sw.js` used to conflict on every single merge, because the transport was written INTO it. It no
+longer does: upstream grew a transport seam, our transport moved to `providers/kilogent/`, and the
+worker is now the same file on both sides. Verify that at any time:
 
 ```bash
-git checkout --theirs packages/extension/src/sw.js
-grep -n -i kilogent packages/extension/src/sw.js    # should find them all back
+git fetch upstream
+for f in sw.js providers/registry.js providers/bridge/index.js executor.js connection.js page-scripts.js; do
+  git diff --quiet upstream/main -- "packages/extension/src/$f" \
+    && echo "ok    $f" || echo "EDITED $f  ← a fork must not"
+done
 ```
 
-This is the one genuinely annoying part of the fork, and it is temporary. When upstream splits
-`sw.js` into a core shell plus a provider hook, our transport moves into `providers/kilogent/` and
-these two files stop being ours at all. Until then, budget for it.
+Anything that prints `EDITED` is a merge you will be resolving by hand forever. Move it into
+`providers/kilogent/`, or send it upstream. (Point it at whichever upstream branch carries the
+transport seam — it is `main` once that is merged.)
+
+`test:registry` is upstream's and it walks whatever `providers/index.js` lists, so it checks OUR
+transport too: that it satisfies the registry's shape, and that it does not claim `getStatus` or
+`reconnect`. A fork gets that coverage without writing a line of it.
+
+**The popup is the one that is still ours**, and it is the honest remainder: a branded popup IS the
+brand, and there is no seam for it yet. Resolve it by taking upstream's structural changes and
+keeping our sign-in panel. When upstream grows a popup seam, this row goes too.
 
 ### Which changes go upstream instead
 
@@ -87,7 +100,7 @@ Ask one question: **would this help somebody who has never heard of Kilogent?**
 | A CDP bug, a snapshot fix, a new browser action | **upstream**, as a pull request |
 | Anything in `executor.js` or `page-scripts.js` | **upstream**, always |
 | Our endpoint, our auth, our storage keys, our strings | here |
-| A new `kilogent-*.js` file | here |
+| A new file under `providers/kilogent/` | here |
 
 Sending core fixes upstream is not politeness. A fix kept here is a fix we re-merge by hand forever.
 
@@ -102,11 +115,11 @@ point. What follows is the full inventory of what a rebrand touches.
 
 | # | Where | What to change |
 |---|---|---|
-| 1 | `packages/extension/src/kilogent-*.js` | rename all five files to `<yourbrand>-*.js`, and their imports |
+| 1 | `packages/extension/src/providers/kilogent/` | rename the directory, and the one import in `providers/index.js` |
 | 2 | `packages/extension/manifest.json` | `name`, `description` — this is what Chrome shows |
 | 3 | `packages/extension/popup.html` + `popup.js` | every visible string |
-| 4 | `<yourbrand>-config.js` → `KEYS` | the `chrome.storage` keys |
-| 5 | `<yourbrand>-config.js` → `DEFAULT_FUNCTIONS_BASE` | **your own endpoint** — this one is not cosmetic |
+| 4 | `providers/<yourbrand>/config.js` → `KEYS` | the `chrome.storage` keys |
+| 5 | `providers/<yourbrand>/config.js` → `DEFAULT_FUNCTIONS_BASE` | **your own endpoint** — this one is not cosmetic |
 | 6 | `package.json` | `name` |
 | 7 | `scripts/<yourbrand>-harness.mjs` | the harness and its npm script |
 
@@ -115,7 +128,7 @@ A case-preserving find-and-replace covers 1–4, 6 and 7. Number 5 is a real dec
 ### Three traps
 
 **Do not rename a project id that happens to contain the old brand.** This repository still says
-`lumi-afb7d` in `kilogent-config.js`, on purpose. That is a Firebase **project id** — an identifier
+`lumi-afb7d` in `providers/kilogent/config.js`, on purpose. That is a Firebase **project id** — an identifier
 somebody else's server knows. Renaming it points the extension at a project that does not exist, and
 the symptom is every sign-in failing with a network error that names nothing.
 
@@ -152,6 +165,10 @@ broken import or a renamed storage key fails there rather than in somebody's bro
 
 ### The rule that makes all of this work
 
-**A fork never edits the core.** Put your code in your own files, and leave `executor.js`,
-`page-scripts.js` and `connection.js` exactly as upstream wrote them. That single habit is the
-difference between `git merge upstream/main` being routine and being a day's work.
+**A fork never edits the core.** Put your code in `providers/<yours>/` and leave `sw.js`,
+`executor.js`, `page-scripts.js`, `connection.js`, `providers/registry.js` and `providers/bridge/`
+exactly as upstream wrote them. That single habit is the difference between `git merge
+upstream/main` being routine and being a day's work.
+
+This fork is currently down to **one directory and three lines** of `providers/index.js` under
+`src/` — plus the popup, which has no seam yet. That is what the rule buys.

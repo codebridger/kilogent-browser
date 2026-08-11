@@ -1,6 +1,7 @@
 {
   "name": "@remote-browser-mcp/daemon",
   "version": "0.1.0",
+  "license": "Apache-2.0",
   "description": "Local MCP sidecar: presence detection and session notifications",
   "type": "module",
   "main": "dist/index.js",

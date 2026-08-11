@@ -16,18 +16,20 @@ Upstream is **[navidshad/remote-browser-mcp](https://github.com/navidshad/remote
 the open project: the extension core, the relay, and the MCP server. This repository is the
 **Kilogent-branded build** of it.
 
-Everything Kilogent-specific lives in files named `kilogent-*`:
+Everything Kilogent-specific lives in **one directory**, `packages/extension/src/providers/kilogent/`:
 
 | File | What it does |
 |---|---|
-| `packages/extension/src/kilogent-auth.js` | signing in, and keeping the session alive |
-| `packages/extension/src/kilogent-connection.js` | the socket to Kilogent's relay |
-| `packages/extension/src/kilogent-api.js` | the browser's own row, written under rules |
-| `packages/extension/src/kilogent-blocklist.js` | the second of the two blocklist levels |
-| `packages/extension/src/kilogent-config.js` | the one URL compiled in, and the storage keys |
+| `index.js` | the transport itself — what upstream's registry calls |
+| `auth.js` | signing in, and keeping the session alive |
+| `connection.js` | the socket to Kilogent's relay |
+| `api.js` | the browser's own row, written under rules |
+| `blocklist.js` | the second of the two blocklist levels |
+| `config.js` | the one URL compiled in, and the storage keys |
 
 **The rule that keeps this fork alive: never edit the core.** `executor.js`, `page-scripts.js`
-and `connection.js` come from upstream untouched, so `git merge upstream/main` stays clean. A fix
+and `connection.js` come from upstream untouched — as do `sw.js`, `providers/registry.js` and
+`providers/bridge/` — so `git merge upstream/main` stays clean. A fix
 that belongs to everybody goes upstream as a pull request and comes back down; only branding and
 the Kilogent transport are ours.
 
@@ -36,9 +38,13 @@ git remote add upstream https://github.com/navidshad/remote-browser-mcp.git
 git fetch upstream && git merge upstream/main
 ```
 
-⚠️ `sw.js` and `popup.js` are the two files that do NOT yet obey that rule — Kilogent's transport
-was written into them in place rather than beside them, so they will conflict on every upstream
-merge until the core/provider split lands. That split is the next piece of work.
+**`sw.js` no longer conflicts.** It used to, on every single merge, because the transport was
+written into it — 390 lines where upstream had 69. Upstream grew a transport seam, our transport
+moved into the directory above, and the worker is now byte-identical on both sides. Under `src/`,
+this fork's entire divergence is that one directory plus **three lines** of `providers/index.js`.
+
+⚠️ `popup.js` and `popup.html` are the honest remainder: ours are rewritten for the sign-in flow and
+the popup has no seam yet, so they still conflict. That is the next piece of work.
 
 📖 **[MAINTAINING.md](MAINTAINING.md)** is the guide for both jobs: the full update loop (including
 which files conflict and how to resolve them), and the complete inventory of what a rebrand touches

@@ -1,6 +1,7 @@
 {
   "name": "@remote-browser-mcp/agent",
   "version": "0.1.0",
+  "license": "Apache-2.0",
   "description": "Terminal agent that drives the local browser through the tunnel",
   "type": "module",
   "main": "dist/index.js",
