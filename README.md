@@ -205,6 +205,23 @@ and cuts **no** GitHub Release — a pre-release is for whoever asked for it by 
 npm run versions      # what the next release would be, and why
 ```
 
+The workflow is **four jobs, not four files**, and that is deliberate. A release has to list where
+*all* packages stand, so something must see every outcome at once — across separate workflow files
+that means `workflow_run` chaining, which reintroduces "which commit is this about" and is where
+release pipelines quietly ship the wrong thing. Jobs give the same separation with `needs` doing
+the coordination:
+
+```
+resolve  ──┬──▶ relay      (npm, only if packages/relay changed)
+           ├──▶ extension  (stamp + zip, always)
+           └──────────────▶ publish  (one GitHub Release, from both outcomes)
+```
+
+**A failure is scoped to its package.** A relay publish that fails does not stop the extension
+being built and released — the release says so instead, in the table. Anything other than an
+outright success is reported as not published, because a release naming a version npm does not
+have is worse than a red build.
+
 ### Versions are derived, never typed
 
 From conventional-commit subjects: `feat` is a minor, a `!` or a `BREAKING CHANGE:` footer is a
