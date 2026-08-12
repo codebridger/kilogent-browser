@@ -36,6 +36,8 @@ export class KilogentConnection {
     this.ownerUid = null;
     /** Ship blocklists, per open session. Unioned with the owner's at enforcement time. */
     this.sessionBlocklists = new Map();
+    /** sessionId -> how many navigations `Fetch` has refused for it. See `blockedCountFor`. */
+    this.blockedNavigations = new Map();
     this.executor = deps.makeExecutor(
       (attached, tabId, url, reason) => this.pushStatus(attached, tabId, url, reason),
       identity.label || "Kilogent",
@@ -90,6 +92,23 @@ export class KilogentConnection {
    * before the socket opens, so a blocked origin receives no connection, no TLS handshake and none
    * of the person's cookies.
    */
+  /**
+   * How many navigations this session has had refused, so a command can say so.
+   *
+   * THE TWO HALVES CANCELLED EACH OTHER OUT WITHOUT THIS, and a live agent found it. `Fetch` stops
+   * the navigation, so the tab NEVER MOVES — and `allowUrl`, asked afterwards where the tab is,
+   * sees the page it was already on, which is allowed, and permits the command. Prevention worked
+   * perfectly and the agent was told nothing: it clicked a link, got `Clicked e41`, read the page,
+   * found itself still on the search results, and reported that it could not tell whether the
+   * blocklist had fired or something else had broken.
+   *
+   * A counter rather than a flag, and keyed by SESSION rather than globally: two sessions run
+   * concurrently on one connection, and a block in one must not refuse the other's command.
+   */
+  blockedCountFor(sessionId) {
+    return this.blockedNavigations.get(sessionId) ?? 0;
+  }
+
   async armTab(chromeTabId) {
     await this.executor.sendCdp(chromeTabId, "Fetch.enable", {
       patterns: [{ requestStage: "Request", resourceType: "Document" }],
@@ -130,6 +149,11 @@ export class KilogentConnection {
           errorReason: "BlockedByClient",
         });
         this.deps.log?.("[kilogent] blocked a navigation", url ?? "(unknown)");
+        // Recorded so the command that caused it can REPORT it. Without this the refusal is
+        // invisible: the tab simply never moves, and every later check sees an allowed page.
+        if (idx) {
+          this.blockedNavigations.set(idx.sessionId, this.blockedCountFor(idx.sessionId) + 1);
+        }
       }
     } catch (e) {
       // The target detached between the pause and the answer. Nothing is left to answer to, and the
@@ -316,7 +340,26 @@ export class KilogentConnection {
       return;
     }
     try {
+      // Sampled BEFORE, compared after: a command "succeeded" whose navigation was refused mid-flight
+      // must not be reported as success. A click on a blocked link returns `Clicked e41` and leaves
+      // the tab exactly where it was, which is indistinguishable from a dead link unless we say so.
+      const blockedBefore = this.blockedCountFor(m.sessionId);
       const result = await this.executor.execute(m.name, args, m.deadlineMs, m.sessionId);
+      if (this.blockedCountFor(m.sessionId) > blockedBefore) {
+        this.send({
+          t: "res",
+          id: m.id,
+          ok: false,
+          error: {
+            code: "blocked",
+            message:
+              "That went to an address blocked on this browser, so the page was not loaded. " +
+              "You are still on the previous page. Ask its owner, or a captain — you cannot change " +
+              "this yourself.",
+          },
+        });
+        return;
+      }
       this.send({ t: "res", id: m.id, ok: true, result });
     } catch (e) {
       this.send({

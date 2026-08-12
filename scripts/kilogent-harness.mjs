@@ -57,6 +57,12 @@ const ok = (cond, m) => (cond ? pass(m) : fail(m));
 let nextTabId = 100;
 /** Where the next click lands the tab. Null = a click does not navigate. */
 let clickLandsOn = null;
+/** When set, a click's navigation is REFUSED by interception and the tab does NOT move. */
+let clickBlockedBy = null;
+let pausedSeq = 0;
+/** The live connection, so the module-level chrome fake can reach it. `conn` itself is a local
+ *  of `main()`, which the fake's closure cannot see — that is why this exists. */
+let connRef = null;
 /** Tabs the transport armed interception on, and how it answered each paused request. */
 const armedTabs = new Set();
 const fetchAnswers = [];
@@ -103,6 +109,18 @@ globalThis.chrome = {
       // evaluates to locate the element, so answering it also MOVES the tab, exactly as following a
       // real link does. Without this the fake tab never moves, and every click assertion below
       // would pass against a guard that does nothing.
+      if (method === "Runtime.evaluate" && params.expression.includes("__rbm") && clickBlockedBy) {
+        // THE REAL SEQUENCE. The click fires, the navigation it starts is paused and refused, and
+        // the tab stays exactly where it was. Nothing moves — so every later "where is the tab"
+        // check sees an allowed page, which is precisely why the block must be RECORDED and cannot
+        // be inferred afterwards.
+        return void connRef
+          .onDebuggerEvent({ tabId: target.tabId }, "Fetch.requestPaused", {
+            requestId: "req-click-" + ++pausedSeq,
+            request: { url: clickBlockedBy },
+          })
+          .then(() => cb?.({ result: { value: { found: true, x: 1, y: 1 } } }));
+      }
       if (method === "Runtime.evaluate" && params.expression.includes("__rbm") && clickLandsOn) {
         const t = tabs.get(target.tabId);
         if (t) t.url = clickLandsOn;
@@ -202,7 +220,7 @@ async function main() {
   };
 
   let ownBlocklist = [];
-  const conn = new KilogentConnection(
+  const conn = (connRef = new KilogentConnection(
     {
       browserId: BROWSER_ID,
       label: "Harness MacBook",
@@ -225,7 +243,7 @@ async function main() {
       isBlocked,
       log: () => {},
     },
-  );
+  ));
 
   // ── 1. the v2 handshake ─────────────────────────────────────────────────────────────────────
   console.log("-- handshake --");
@@ -381,6 +399,50 @@ async function main() {
   ok(
     fetchAnswers.some((a) => a.method === "Fetch.failRequest" && a.requestId === "req-amnesia"),
     "an unrecognised tab FAILS the request — unknown state never means allow, and never hangs",
+  );
+
+  // ── the refusal must be LEGIBLE, which is what the live test caught ──────────────────────────
+  //
+  // `Fetch` stops the navigation, so the tab never moves — and `allowUrl`, asked afterwards where
+  // the tab is, sees the page it was already on and permits the command. Prevention worked and the
+  // agent was told nothing: it clicked, got "Clicked e41", read the page, found itself still on the
+  // search results, and reported it could not tell a blocklist from a broken link.
+  // Pre-bumping the counter here would prove nothing: the check only refuses when a block happens
+  // DURING the command, which is the whole point. So the click itself must be the thing that gets
+  // refused, exactly as it is in production.
+  clickLandsOn = null;
+  clickBlockedBy = "https://bank.test/statement";
+  const blockedBefore = conn.blockedCountFor("job2");
+
+  const afterBlockedNav = await dispatch(port, {
+    name: "browser_click",
+    args: { ref: "e1", element: "a link" },
+    sessionId: "job2",
+    timeoutMs: 5000,
+  });
+  ok(
+    JSON.stringify(afterBlockedNav.body ?? {}).includes("blocked"),
+    "and the next command REPORTS it — a silent no-op is indistinguishable from a dead link",
+  );
+
+  // KEYED BY SESSION, asserted directly. The dispatch below cannot prove this on its own: job1's
+  // command starts AFTER job2's block, so even a global counter would sample the same value before
+  // and after and refuse nothing. Reading both ledgers is what actually distinguishes the two.
+  ok(
+    conn.blockedCountFor("job2") > 0 && conn.blockedCountFor("job1") === 0,
+    "the ledger is per-session — job1 carries none of job2's refusals",
+  );
+
+  // And the command itself is undisturbed: two sessions run concurrently on one connection.
+  const otherSession = await dispatch(port, {
+    name: "browser_read",
+    args: {},
+    sessionId: "job1",
+    timeoutMs: 5000,
+  });
+  ok(
+    !JSON.stringify(otherSession.body ?? {}).includes("blocked"),
+    "and another session's command is untouched by it",
   );
 
   // ── 4. an expired ticket is retried, not backed off ─────────────────────────────────────────
