@@ -75,6 +75,41 @@ export const SNAPSHOT_FN = function (narrow) {
     return txt.length > 80 ? txt.slice(0, 80) + "…" : txt;
   }
 
+  /** The two characters that would otherwise break out of a quoted name. */
+  function esc(v) {
+    return String(v).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  }
+
+  /**
+   * Elements whose text is CODE, not content.
+   *
+   * `visible()` already rejects these through `display: none` — but that is the PAGE's stylesheet
+   * deciding what an agent reads. A site that styles `script { display: block }`, or a UA sheet that
+   * differs, would otherwise put its own source into an agent's context and its transcript. Naming
+   * them makes the guarantee ours rather than the page's.
+   */
+  const NEVER_TEXT = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "SVG", "CANVAS", "IFRAME"]);
+
+  /**
+   * The text in an element's OWN child text nodes — never its descendants'.
+   *
+   * DIRECT is what makes this safe to call on every element without repeating a word. A
+   * `<div><p>Hello</p></div>` has no direct text on the div and "Hello" on the p, so the sentence is
+   * emitted exactly once, at the depth it actually lives. `innerText` here would repeat the whole
+   * page at every level of the tree.
+   */
+  function directText(el) {
+    if (NEVER_TEXT.has(String(el.tagName || "").toUpperCase())) return "";
+    const kids = el.childNodes;
+    if (!kids) return "";
+    let out = "";
+    for (let i = 0; i < kids.length; i++) {
+      const n = kids[i];
+      if (n && n.nodeType === 3) out += n.nodeValue || "";
+    }
+    return out.trim().replace(/\s+/g, " ");
+  }
+
   const ACTIONABLE = new Set([
     "link",
     "button",
@@ -105,7 +140,7 @@ export const SNAPSHOT_FN = function (narrow) {
       if (interesting(role)) {
         const ref = "e" + ++seq;
         els[ref] = el;
-        const name = nameOf(el).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+        const name = esc(nameOf(el));
         let extra = "";
         if (role === "heading") {
           const m = el.tagName.match(/^H(\d)/i);
@@ -114,6 +149,24 @@ export const SNAPSHOT_FN = function (narrow) {
         if (el.disabled) extra += " [disabled]";
         lines.push("  ".repeat(depth) + '- ' + role + ' "' + name + '"' + extra + " [ref=" + ref + "]");
         consumed = true;
+      } else {
+        // PROSE, and it is why this snapshot stopped being an interaction map.
+        //
+        // `interesting()` admits actionable roles and headings, so a page's actual words — every
+        // paragraph, list item and table cell — were silently absent. `browser_read`'s `text`
+        // format deliberately routes here too ("the only page read there is"), which meant an
+        // agent asked to read a page could not read one: it got the buttons and the <h1> and
+        // nothing that was written. A real agent found this on example.com, reported the heading
+        // and the link correctly, and said the body paragraph "didn't come through".
+        //
+        // EMITTED ONLY IN THE `else`. An actionable element's words are already its `name`, so a
+        // link would otherwise appear twice — once as `link "Learn more"` and again as text.
+        //
+        // NO REF, deliberately. Refs exist for `browser_act`, and clicking a paragraph is not a
+        // thing; adding one would inflate every ref number for no gain. `find` still matches these
+        // lines, which is the narrowing that actually matters on a long page.
+        const prose = directText(el);
+        if (prose) lines.push("  ".repeat(depth) + '- text "' + esc(prose) + '"');
       }
       walk(el, consumed ? depth + 1 : depth);
       if (el.shadowRoot) walk(el.shadowRoot, consumed ? depth + 1 : depth);
@@ -133,10 +186,45 @@ export const SNAPSHOT_FN = function (narrow) {
   // for every element, so a ref that is not shown still resolves for `browser_act`. Narrowing
   // changes what the agent READS, never what it can reach.
   var all = lines;
+
+  /**
+   * A ceiling on what one read can cost, applied to every exit.
+   *
+   * Before page text was included, a snapshot was bounded by how many CONTROLS a page had, which is
+   * small even on a bad page. Prose has no such ceiling — an article, a docs page or a comment
+   * thread can be hundreds of kilobytes, and this string goes verbatim into an agent's context and
+   * then into every subsequent turn of that session. Unbounded output reaching a model is a cost
+   * and a failure mode, not a detail.
+   *
+   * It CUTS AT A LINE BOUNDARY and says what it did, because a snapshot truncated mid-element would
+   * hand the agent a malformed ref. The footer names `find`, since the agent's next move is to ask
+   * a narrower question rather than to give up.
+   */
+  var MAX_CHARS = 40000;
+  function clamp(text) {
+    if (text.length <= MAX_CHARS) return text;
+    var kept = [];
+    var used = 0;
+    var rows = text.split("\n");
+    for (var i = 0; i < rows.length; i++) {
+      if (used + rows[i].length + 1 > MAX_CHARS) break;
+      kept.push(rows[i]);
+      used += rows[i].length + 1;
+    }
+    return (
+      kept.join("\n") +
+      "\n  (…truncated: " + (rows.length - kept.length) + " of " + rows.length +
+      " lines dropped. Re-read with `find` to get the part you need.)"
+    );
+  }
+  function out(body) {
+    return clamp(header + "\n" + body);
+  }
+
   if (narrow && narrow.ref) {
     var want = "[ref=" + narrow.ref + "]";
     var one = all.filter(function (l) { return l.indexOf(want) !== -1; });
-    return header + "\n" + (one.length
+    return out(one.length
       ? one.join("\n")
       : '  (no element ' + narrow.ref + ' on the page now — take a fresh snapshot)');
   }
@@ -145,11 +233,12 @@ export const SNAPSHOT_FN = function (narrow) {
     var hit = all.filter(function (l) { return l.toLowerCase().indexOf(n) !== -1; });
     // The COUNT is the point of the footer: an agent that sees 3 of 412 knows the page is bigger
     // than what it is looking at, and can widen rather than concluding the rest is not there.
-    return header + "\n" + (hit.length
-      ? hit.join("\n") + '\n  (' + hit.length + " of " + all.length + ' elements match "' + narrow.find + '")'
-      : '  (nothing matches "' + narrow.find + '" — ' + all.length + " elements on this page)");
+    return out(hit.length
+      ? hit.join("\n") + '\n  (' + hit.length + " of " + all.length + ' lines match "' + narrow.find + '")'
+      : '  (nothing matches "' + narrow.find + '" — ' + all.length + " lines on this page)");
   }
-  return header + "\n" + (all.join("\n") || "  (no interactable elements found)");
+  // "readable", not "interactable": a page of pure prose with no controls is no longer empty here.
+  return out(all.join("\n") || "  (nothing readable on this page)");
 };
 
 /** Resolve a ref to box-center viewport coords (for trusted mouse dispatch). */
