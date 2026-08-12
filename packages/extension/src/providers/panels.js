@@ -8,7 +8,6 @@
 // to the thing it configures. The worker and the popup are genuinely different programs that
 // happen to ship in the same directory.
 
-import { createBridgePanel } from "./bridge/popup.js";
 import { createKilogentPanel } from "./kilogent/popup.js";
 
 /**
@@ -28,9 +27,21 @@ import { createKilogentPanel } from "./kilogent/popup.js";
  *
  * @type {Array<(deps: any) => {name: string, mount: Function, render: Function}>}
  */
-export const PANELS = [
-  createKilogentPanel,
-  // Folded away behind a <details>: this build's users connect to Kilogent, and the
-  // self-hosted bridge is the escape hatch rather than the offer.
-  (deps) => ({ ...createBridgePanel(deps), summary: "Advanced — self-hosted bridge" }),
-];
+// THE SELF-HOSTED BRIDGE IS DELIBERATELY NOT REGISTERED IN THIS BUILD.
+//
+// It is not about tidiness. The bridge transport is a SECOND path to full CDP control of this
+// browser, and it is trusted on nothing but a URL and a shared token somebody types into the popup.
+// None of Kilogent's three locks — Ship membership, the captain's per-agent grant, the owner's
+// consent — is consulted on that path, because they live in `providers/kilogent/`.
+//
+// Worse, so does the blocklist. `isBlocked` is referenced only by `providers/kilogent/*`, so a
+// bridge session ignores the user's own "Never open these" list — while the popup, three lines
+// above it, promises "Your list always applies". That sentence is true only once this is absent.
+//
+// So a build carrying our name offers exactly one way in. Anyone who genuinely wants the
+// self-hosted bridge should run the upstream extension, which is what it is for.
+//
+// The FILES stay (`providers/bridge/`), unregistered rather than deleted: deleting them would mean
+// re-deleting them at every merge from upstream. `scripts/check-branding.mjs` asserts they stay
+// unregistered, because a merge that re-adds the line is exactly how this would come back.
+export const PANELS = [createKilogentPanel];

@@ -65,7 +65,8 @@ optional extra.
 | `src/providers/registry.js`, `src/providers/bridge/` | **never** | same |
 | `src/providers/kilogent/**` | **never** | upstream does not have it |
 | `popup.js`, `src/providers/bridge/popup.js` | **never** | byte-identical too — the popup has a seam now |
-| `src/providers/index.js`, `src/providers/panels.js` | **rarely** | we add one import and one entry to each; conflicts only if upstream edits those same lines |
+| `src/providers/index.js`, `src/providers/panels.js` | **rarely** | we add one entry to each **and REMOVE upstream's bridge entry** — see §2a. Conflicts only if upstream edits those lines; if a merge restores `createBridgeTransport`/`createBridgePanel`, `npm run test:branding` fails |
+| `src/providers/bridge/**` | **never** | upstream's, unedited and UNREGISTERED. Kept in the tree so a merge never conflicts (§2a) |
 | `popup.html` | **rarely** | the BODY is upstream's structure; the heading, **the sub-heading** and the stylesheet are ours. This row once said "only the heading", a merge believed it, and the popup shipped upstream's copy under our name — `npm run test:branding` is the guard that now catches it |
 | `scripts/popup-test.mjs` | **rarely** | upstream's file with OUR panel's tests appended at the end |
 | `scripts/resolve-versions.mjs`, `scripts/release-notes.mjs`, `.github/workflows/release.yml` | **never** | byte-identical to upstream — what this repo releases is *declared*, not coded (§2) |
@@ -116,6 +117,33 @@ Ask one question: **would this help somebody who has never heard of Kilogent?**
 Sending core fixes upstream is not politeness. A fix kept here is a fix we re-merge by hand forever.
 
 ---
+
+### 2a. Why the self-hosted bridge is not registered here
+
+Upstream ships one transport, the **self-hosted bridge**: you run `packages/bridge-server` yourself
+and type its URL and a shared token into the popup. This build does not register it, and that is a
+security decision rather than a tidiness one.
+
+**It is a second path to full CDP control of the browser, and it is trusted on nothing but a pasted
+URL and token.** None of Kilogent's three locks — Ship membership, the captain's per-agent grant,
+the owner's consent — is on that path; they all live in `providers/kilogent/`.
+
+**So does the blocklist.** `isBlocked` is referenced only by `providers/kilogent/*`. A bridge session
+therefore ignores the user's own "Never open these" list — while the popup, three lines above that
+list, promises *"Your list always applies."* That sentence is true only while the bridge is absent.
+
+It also happened to be the most prominent control in the popup: a blue **+ Add profile** button, for
+a feature this build's audience never wants.
+
+**The files stay.** `providers/bridge/` is unregistered, not deleted — deleting it would mean
+re-deleting it at every merge, and the seam exists precisely so that registration is the only
+question. Removing it is one line in each of two files.
+
+`scripts/check-branding.mjs` asserts it stays unregistered, because a merge restoring upstream's
+version of a two-line file is the least suspicious diff imaginable.
+
+Anyone who genuinely wants the self-hosted bridge should run the upstream extension, which is what
+it is for.
 
 ## 2. Releasing — and the one thing this fork must never do
 

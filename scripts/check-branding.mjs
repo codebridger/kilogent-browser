@@ -31,6 +31,23 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (rel) => readFileSync(path.join(root, rel), 'utf8');
 
 /**
+ * Strip import lines AND comments, leaving executable code.
+ *
+ * Both halves were found the hard way. Without stripping IMPORTS, "is it registered" is satisfied by
+ * "is it imported" — the identifier appears on both lines, so deleting the registration left the
+ * check green. Without stripping COMMENTS, the comment in `providers/index.js` that EXPLAINS why the
+ * bridge is absent names it, and tripped the very check it was documenting.
+ *
+ * Line comments only: no string in either list appears inside a block comment, and a real JS parser
+ * for two greps would be worse than the problem.
+ */
+const codeOnly = (body) =>
+  body
+    .split('\n')
+    .filter((line) => !/^\s*import\b/.test(line) && !/^\s*\/\//.test(line))
+    .join('\n');
+
+/**
  * `imports: false` means: this string must appear somewhere OTHER than an import line.
  *
  * The first version of this file checked `body.includes("createKilogentTransport")`, which is
@@ -81,18 +98,37 @@ const MUST_CONTAIN = [
   ],
 ];
 
+/**
+ * Strings that must NOT be present — the mirror of the list above, and the smaller half.
+ *
+ * Only ONE thing lives here, and it is not stylistic. The self-hosted bridge transport is a second
+ * path to full CDP control of the browser, trusted on a URL and a token typed into the popup, and it
+ * sits outside every Kilogent lock INCLUDING the user's own blocklist (`isBlocked` is referenced
+ * only by `providers/kilogent/*`). The popup promises "Your list always applies"; that sentence is
+ * true only while the bridge is unregistered.
+ *
+ * A merge from upstream re-adds it by simply restoring upstream's version of a two-line file, which
+ * is the least suspicious diff imaginable. Hence a test.
+ */
+const MUST_NOT_CONTAIN = [
+  [
+    'packages/extension/src/providers/index.js',
+    'the self-hosted bridge TRANSPORT stays unregistered',
+    'createBridgeTransport',
+  ],
+  [
+    'packages/extension/src/providers/panels.js',
+    'the self-hosted bridge PANEL stays unregistered',
+    'createBridgePanel',
+  ],
+];
+
 let failed = 0;
 for (const [file, what, needle, opts = {}] of MUST_CONTAIN) {
   let body;
   try {
     body = read(file);
-    // Drop import lines, so "is it registered" cannot be satisfied by "is it imported".
-    if (opts.imports === false) {
-      body = body
-        .split('\n')
-        .filter((line) => !/^\s*import\b/.test(line))
-        .join('\n');
-    }
+    if (opts.imports === false) body = codeOnly(body);
   } catch (err) {
     console.log(`  ✗ ${file} — cannot read: ${err.message}`);
     failed++;
@@ -109,8 +145,24 @@ for (const [file, what, needle, opts = {}] of MUST_CONTAIN) {
   }
 }
 
+for (const [file, what, needle] of MUST_NOT_CONTAIN) {
+  // `providers/bridge/` still EXISTS on purpose, so the only question is whether code registers it.
+  const body = codeOnly(read(file));
+  if (body.includes(needle)) {
+    failed++;
+    console.log(`  ✗ ${what}`);
+    console.log(`      ${file} references ${JSON.stringify(needle)} outside an import.`);
+    console.log(`      A merge from upstream probably restored it. Read the comment at the top of`);
+    console.log(`      providers/panels.js before deciding to keep it — it is a security argument,`);
+    console.log(`      not a preference.`);
+  } else {
+    console.log(`  ✓ ${what}`);
+  }
+}
+
+const total = MUST_CONTAIN.length + MUST_NOT_CONTAIN.length;
 if (failed > 0) {
-  console.error(`\n❌ branding: ${failed}/${MUST_CONTAIN.length} of this fork's own strings are missing.`);
+  console.error(`\n❌ branding: ${failed}/${total} checks failed — this build is not this fork.`);
   process.exit(1);
 }
-console.log(`\n✅ branding: ${MUST_CONTAIN.length} fork-owned strings survived.`);
+console.log(`\n✅ branding: ${total} checks passed (${MUST_CONTAIN.length} present, ${MUST_NOT_CONTAIN.length} absent).`);

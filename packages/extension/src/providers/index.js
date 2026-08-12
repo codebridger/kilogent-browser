@@ -10,11 +10,13 @@
 // hand for as long as the fork exists. If the seam genuinely will not stretch far enough, that is
 // worth an upstream issue rather than a local edit; the seam is young and it is meant to move.
 
-import { createBridgeTransport } from "./bridge/index.js";
 import { createKilogentTransport } from "./kilogent/index.js";
 
 /**
  * Factories, not instances, so nothing connects at import time — the worker decides when.
  * @type {Array<(deps: any) => import("./registry.js").Transport>}
  */
-export const TRANSPORTS = [createBridgeTransport, createKilogentTransport];
+// NO `createBridgeTransport` HERE, DELIBERATELY — see providers/panels.js for the reason. The
+// file stays in the tree so a merge from upstream never conflicts; it is simply not registered,
+// which is the seam working exactly as intended.
+export const TRANSPORTS = [createKilogentTransport];
