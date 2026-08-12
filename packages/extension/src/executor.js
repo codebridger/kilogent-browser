@@ -90,11 +90,44 @@ class ToolError extends Error {
 }
 
 export class Executor {
-  /** @param {(attached: boolean, tabId: number|null, url: string|null, reason?: string) => void} pushStatus
-   *  @param {string} [label] group-title label for this executor's tab groups (e.g. the profile name) */
-  constructor(pushStatus, label) {
+  /**
+   * @param {(attached: boolean, tabId: number|null, url: string|null, reason?: string) => void} pushStatus
+   * @param {string} [label] group-title label for this executor's tab groups (e.g. the profile name)
+   * @param {object} [policy] OPTIONAL, and absent is the upstream path — see below.
+   * @param {(url: string, ctx: {sessionId: string, tab: string}) => boolean|string|Promise<boolean|string>} [policy.allowUrl]
+   * @param {(chromeTabId: number) => Promise<void>} [policy.onAttached]
+   */
+  constructor(pushStatus, label, policy) {
     this.pushStatus = pushStatus;
     this.label = label || "Agent";
+    /**
+     * MAY THIS TAB BE WHERE IT NOW IS? A transport's own question, asked by core.
+     *
+     * Core must not learn what a blocklist is — that is the fork's word, and this file is shared.
+     * So it asks a PREDICATE and reports whatever it says. Resolving `true` allows; resolving
+     * `false`, or a STRING, refuses — and a string becomes the message an agent reads, so the
+     * transport keeps its own wording.
+     *
+     * It is asked AFTER an action as well as before, which is the whole point: a command that
+     * names a URL can be checked from its argument, and a CLICK cannot. Asking where the tab
+     * actually ended up covers the click, a 30x, a meta-refresh and a `window.open` without core
+     * knowing any of those exist.
+     *
+     * NULL BY DEFAULT rather than a `() => true` stub, so a build with no policy runs the exact
+     * instruction sequence it ran before: no extra await, no extra `chrome.tabs.get`, nothing that
+     * can reject. A default predicate would be observable; absence is not.
+     */
+    this.allowUrl = policy?.allowUrl || null;
+    /**
+     * Run after the debugger is attached and the base domains are enabled, and AWAITED before the
+     * first command proceeds.
+     *
+     * Awaited is the entire reason it exists. `pushStatus` already fires on attach and a transport
+     * could arm interception from there with no core change at all — but that is fire-and-forget,
+     * so `Page.navigate` can commit before the interception is live and the FIRST navigation after
+     * every attach goes unprotected. That is the failure this hook is for.
+     */
+    this.onAttached = policy?.onAttached || null;
     // When true (per-profile popup toggle), human input is suppressed on agent
     // tabs while the activity overlay is visible. Updated live by Connection.
     this.blockInput = false;
@@ -305,11 +338,45 @@ export class Executor {
     });
     await this.sendCdp(chromeTabId, "Page.enable", {});
     await this.sendCdp(chromeTabId, "Runtime.enable", {});
+    // AWAITED, and re-run on every re-attach: whatever a transport arms here is per-target and dies
+    // with the session, so a tab the human detached from the DevTools infobar comes back unarmed
+    // unless this runs again. A failure here fails the attach rather than proceeding unprotected.
+    if (this.onAttached) await this.onAttached(chromeTabId);
     if (rec) rec.attached = true;
     const info = await chrome.tabs.get(chromeTabId).catch(() => null);
     if (rec && info) rec.url = info.url;
     this.pushStatus(true, chromeTabId, info ? info.url : null);
     return chromeTabId;
+  }
+
+  /**
+   * Ask the transport whether this tab may be where it now is. No-op when no policy was supplied.
+   *
+   * `about:blank` IS SKIPPED, and omitting that skip bricks every session. Core creates its own
+   * tabs at `about:blank` (`tabNew`), and a blocklist that canonicalises through an origin cannot
+   * produce one for a non-http URL — so a policy that fails closed on "no origin", which is the
+   * correct posture for a real address, would refuse core's own placeholder and every session would
+   * die at its first command.
+   *
+   * A PREDICATE THAT THROWS REFUSES. It was asked whether this address is allowed and could not
+   * answer; treating that as "yes" is the one interpretation that is never safe.
+   */
+  async assertAllowed(chromeTabId, sessionId, handle) {
+    if (!this.allowUrl) return;
+    const info = await chrome.tabs.get(chromeTabId).catch(() => null);
+    const url = info?.url;
+    if (!url || url === "about:blank") return;
+    let verdict;
+    try {
+      verdict = await this.allowUrl(url, { sessionId, tab: handle });
+    } catch (e) {
+      verdict = false;
+    }
+    if (verdict === true) return;
+    throw new ToolError(
+      "blocked",
+      typeof verdict === "string" ? verdict : "That address is not allowed on this browser."
+    );
   }
 
   /** Serialize command chains per chrome tab; different tabs run concurrently. */
@@ -349,6 +416,11 @@ export class Executor {
       } else {
         this.showAction(chromeTabId, session, actionText(name, a));
       }
+      // AFTER the action, not only before it. `browser_click` names no URL, so the only way to know
+      // where a click took the tab is to look once the click has happened. The result is computed
+      // first and then discarded if the tab moved somewhere it may not be — refusing costs the work
+      // but never hands the agent the page.
+      const outcome = await (async () => {
       switch (name) {
         case "browser_navigate":
           return this.navigate(session, handle, chromeTabId, a.url, deadlineMs);
@@ -371,12 +443,32 @@ export class Executor {
         default:
           throw new ToolError("unknown_tool", `unknown tool: ${name}`);
       }
+      })();
+      await this.assertAllowed(chromeTabId, session.id, handle);
+      return outcome;
     });
   }
 
   // ── commands ─────────────────────────────────────────────────────────────────
   async navigate(session, handle, tabId, url, deadlineMs) {
     if (!url) throw new ToolError("bad_args", "url is required");
+    // The cheap refusal: a URL core was HANDED can be judged before anything is committed, so a
+    // blocked address costs no navigation at all. The post-action check above is what covers the
+    // address nobody named.
+    if (this.allowUrl) {
+      let verdict;
+      try {
+        verdict = await this.allowUrl(url, { sessionId: session.id, tab: handle });
+      } catch (e) {
+        verdict = false;
+      }
+      if (verdict !== true) {
+        throw new ToolError(
+          "blocked",
+          typeof verdict === "string" ? verdict : "That address is not allowed on this browser."
+        );
+      }
+    }
     await this.sendCdp(tabId, "Page.navigate", { url });
     await this.waitForLoad(tabId, Math.min(deadlineMs || 30000, 30000));
     // The navigation wiped the page (and the overlay with it) — re-show it so
@@ -556,6 +648,23 @@ export class Executor {
   }
 
   async tabNew(session, url, deadlineMs) {
+    // BEFORE `chrome.tabs.create`, and this one cannot be covered any other way: the tab is created
+    // with its URL and the debugger attaches AFTERWARDS, so the first document load happens with
+    // nothing intercepting it. This is the only door in front of it.
+    if (url && this.allowUrl) {
+      let verdict;
+      try {
+        verdict = await this.allowUrl(url, { sessionId: session.id, tab: null });
+      } catch (e) {
+        verdict = false;
+      }
+      if (verdict !== true) {
+        throw new ToolError(
+          "blocked",
+          typeof verdict === "string" ? verdict : "That address is not allowed on this browser."
+        );
+      }
+    }
     const created = await chrome.tabs.create({ url: url || "about:blank", active: true });
     const handle = this.registerTab(session, created.id, url || "about:blank");
     await this.ensureGrouped(session, created.id);
