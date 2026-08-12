@@ -22,17 +22,19 @@
     "build:relay": "npm run build -w packages/relay",
     "test:relay": "npm run typecheck -w packages/relay && npm run test:unit -w packages/relay",
     "test:version": "node scripts/resolve-versions.mjs --self-test",
-    "test": "npm run test:lockfile && npm run test:ci-parity && npm run test:extension && npm run test:version && npm run test:notes && npm run test:snapshot && npm run test:select && npm run test:registry && npm run test:popup && npm run test:relay && npm run test:bridge && npm run test:mock && npm run test:profiles && npm run test:tarball",
+    "test": "npm run test:workflows && npm run test:lockfile && npm run test:ci-parity && npm run test:extension && npm run test:version && npm run test:notes && npm run test:snapshot && npm run test:select && npm run test:registry && npm run test:popup && npm run test:relay && npm run test:bridge && npm run test:mock && npm run test:profiles && npm run test:tarball",
     "test:lockfile": "node scripts/check-lockfile.mjs",
     "versions": "node scripts/resolve-versions.mjs --preview",
     "test:notes": "node scripts/release-notes.mjs --self-test",
     "test:extension": "node scripts/check-extension.mjs",
     "test:bridge": "npm run typecheck --workspace=packages/bridge-server",
     "test:tarball": "npm run build -w packages/relay && node scripts/check-tarball.mjs",
-    "test:ci-parity": "node scripts/check-ci-parity.mjs"
+    "test:ci-parity": "node scripts/check-ci-parity.mjs",
+    "test:workflows": "node scripts/check-workflows.mjs"
   },
   "devDependencies": {
     "happy-dom": "^20.11.2",
+    "js-yaml": "^5.2.3",
     "ws": "^8.21.3"
   }
 }
