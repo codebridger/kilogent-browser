@@ -66,7 +66,7 @@ optional extra.
 | `src/providers/kilogent/**` | **never** | upstream does not have it |
 | `popup.js`, `src/providers/bridge/popup.js` | **never** | byte-identical too — the popup has a seam now |
 | `src/providers/index.js`, `src/providers/panels.js` | **rarely** | we add one import and one entry to each; conflicts only if upstream edits those same lines |
-| `popup.html` | **rarely** | the BODY is upstream's structure; only the heading and the stylesheet are ours |
+| `popup.html` | **rarely** | the BODY is upstream's structure; the heading, **the sub-heading** and the stylesheet are ours. This row once said "only the heading", a merge believed it, and the popup shipped upstream's copy under our name — `npm run test:branding` is the guard that now catches it |
 | `scripts/popup-test.mjs` | **rarely** | upstream's file with OUR panel's tests appended at the end |
 | `scripts/resolve-versions.mjs`, `scripts/release-notes.mjs`, `.github/workflows/release.yml` | **never** | byte-identical to upstream — what this repo releases is *declared*, not coded (§2) |
 | `.github/workflows/ci.yml` | **rarely** | upstream's file plus ONE extra step, the Kilogent harness |

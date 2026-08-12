@@ -48,6 +48,11 @@ jobs:
       - name: Manifest and modules
         run: npm run test:extension
 
+      # THIS FORK'S SECOND ADDITION. Upstream cannot run it — it asserts OUR strings, and the whole
+      # point is that a merge from upstream is what silently removes them.
+      - name: Our own branding survived the last merge
+        run: npm run test:branding
+
       - name: Tests
         run: |
           npm run test:snapshot
