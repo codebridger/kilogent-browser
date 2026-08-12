@@ -1,12 +1,17 @@
 // Automated Kilogent-mode harness — no Chrome, no Firebase, no VM.
 //
-// WHY THIS EXISTS AT ALL. The extension's Kilogent half talks to a server that lives in a DIFFERENT,
-// private repository, so nothing links the two ends at compile time: `src/providers/kilogent/connection.js` here
-// and `packages/crew/relay/src/protocol.ts` there are two hand-written descriptions of one wire
-// format. That is exactly the shape of bug that passes every test on both sides — each checks its
-// own belief — and it is how every 0.3.0 runner login broke. So this harness runs the REAL relay,
-// from the published `@lumi.ai/relay` package, and makes the extension's real ConnectionManager
+// WHY THIS EXISTS AT ALL. The extension's Kilogent half and the relay are two hand-written
+// descriptions of one wire format — `src/providers/kilogent/connection.js` here and
+// `packages/relay/src/protocol.ts` beside it. That is exactly the shape of bug that passes every
+// test on both sides, because each checks its own belief, and it is how every 0.3.0 runner login
+// broke. So this harness runs the REAL relay and makes the extension's real ConnectionManager
 // satisfy it. If the two ever disagree, this is the thing that fails.
+//
+// IT USED TO REACH INTO A PUBLISHED PACKAGE BY PATH, with a note right here warning that the next
+// relay release would move `ticket.js` and break the import — in a repo whose CI was not watching
+// the relay. That release happened. The fix was not a tighter version pin: the relay lives in THIS
+// repository now, so these are relative imports into a workspace the test script has just built,
+// and a moved file fails here rather than three weeks later.
 //
 // Wiring:
 //   • a REAL relay (`startRelay` on port 0) with a REAL ticket key
@@ -20,18 +25,11 @@
 // tabs and nobody else's.
 import { setTimeout as sleep } from "node:timers/promises";
 import { WebSocket as WsWebSocket } from "ws";
-// ⚠️ THESE TWO REACH INTO THE RELAY'S BUILD OUTPUT BY PATH, and nothing checks that the paths
-// still exist — not npm, not a type-checker. They are correct for `@lumi.ai/relay@0.1.2`, which
-// this repo pins.
-//
-// The relay has ALREADY moved `ticket.js` to `dist/providers/ticket/ticket.js` upstream, as part of
-// making its authentication pluggable. So the next published relay breaks the second line here.
-// Two things follow, and they are the whole reason this note exists:
-//   • that release must be a MINOR bump (0.2.0), never a patch — `^0.1.2` would silently take a
-//     0.1.3 and this harness would fail on an import, in a repo whose CI is not watching the relay;
-//   • when you take it, bump the dependency and fix the path IN THE SAME COMMIT.
-import { startRelay } from "@lumi.ai/relay/dist/server.js";
-import { mintRelayTicket } from "@lumi.ai/relay/dist/ticket.js";
+// The relay's BUILD OUTPUT, not its source: `packages/relay` is TypeScript and this harness is
+// plain Node. `npm run test:kilogent` runs `build:relay` first, so `dist/` is always current.
+import { startRelay } from "../packages/relay/dist/server.js";
+import { mintRelayTicket } from "../packages/relay/dist/providers/ticket/ticket.js";
+import { resolveAuthProvider } from "../packages/relay/dist/providers/index.js";
 import { Executor } from "../packages/extension/src/executor.js";
 import { KilogentConnection } from "../packages/extension/src/providers/kilogent/connection.js";
 import { effectiveBlocklist, isBlocked } from "../packages/extension/src/providers/kilogent/blocklist.js";
@@ -39,8 +37,11 @@ import { effectiveBlocklist, isBlocked } from "../packages/extension/src/provide
 // connection code reads WebSocket.OPEN/CONNECTING off the global; point it at `ws` in Node.
 globalThis.WebSocket = WsWebSocket;
 
-const TICKET_KEY = "harness-ticket-signing-key";
-const CONTROL_KEY = "harness-control-key";
+// ≥32 characters, and DIFFERENT from each other, because the real ticket provider refuses both —
+// a short key, and a control key that doubles as the signing key. Fixed strings rather than random
+// ones so a failure is reproducible; they never leave this process.
+const TICKET_KEY = "harness-ticket-signing-key-0000000000000000000000000000000000000";
+const CONTROL_KEY = "harness-control-key-1111111111111111111111111111111111111111111";
 const OWNER = "uid_harness_owner";
 const BROWSER_ID = "brw_harness";
 
@@ -137,7 +138,15 @@ async function main() {
     port: 0,
     bindHost: "127.0.0.1",
     controlKey: CONTROL_KEY,
-    ticketKey: TICKET_KEY,
+    // WHO A BROWSER IS is a pluggable provider now, not a key on the config — so this builds the
+    // one Kilogent actually deploys (`ticket`, the default) through the relay's OWN resolver,
+    // rather than hand-rolling something shaped like it. Standing up the real provider is the
+    // point: a change to how a ticket is verified has to reach this harness, and a fake would be
+    // exactly the stand-in that accepts anything and proves nothing.
+    auth: resolveAuthProvider({
+      RELAY_TICKET_KEY: TICKET_KEY,
+      RELAY_CONTROL_KEY: CONTROL_KEY,
+    }),
     maxBrowsers: 10,
     sessionIdleMs: 60_000,
     drainGraceMs: 500,
@@ -158,7 +167,12 @@ async function main() {
     return {
       ticket: mintRelayTicket(
         TICKET_KEY,
-        { ownerUid: OWNER, browserId: BROWSER_ID },
+        // `ownerId`, not `ownerUid`. TWO NAMES ARE LIVE for one value and they are not
+        // interchangeable: `ownerUid` is the WIRE name — what the welcome frame carries and what
+        // the control plane still accepts in a body, both for extensions already installed — while
+        // `ownerId` is what the code calls it. This is a code call, so it is `ownerId`, and passing
+        // the wire name here mints nothing and the handshake simply times out.
+        { ownerId: OWNER, browserId: BROWSER_ID },
         mintTicketTtlMs === null ? Date.now() : Date.now() - mintTicketTtlMs,
       ),
       relayUrl,

@@ -1,0 +1,121 @@
+name: CI
+
+# PULL REQUESTS ONLY. A merge to `main` used to run this AND `release.yml`, and both ran the whole
+# suite against the same commit — two runs, one of them pure duplication.
+#
+# `release.yml`'s first job runs `npm test`, so main and dev are still fully checked; this exists to
+# gate the merge. The split is: CI answers "may this land", Release answers "what ships".
+#
+# EVERY STEP IS AN npm SCRIPT, never inline shell. `npm test` runs exactly what this runs, so a
+# laptop cannot be green while CI is red — the property that broke once already, when a drifted lock
+# file left every local lane passing while `npm ci` refused to start.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  extension:
+    name: Extension
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+
+      - name: The lock file agrees with the workspaces
+        # `npm ci` above already refuses a drifted lock — this runs anyway so the failure NAMES the
+        # workspace instead of printing npm's usage text.
+        run: npm run test:lockfile
+
+      - name: The workflow files load, and npm test still equals CI
+        # `test:workflows` first: a workflow Actions cannot parse produces a run with ZERO
+        # jobs and no logs, which reads like nothing happened rather than like an error.
+        run: |
+          npm run test:workflows
+          npm run test:ci-parity
+
+      - name: Manifest and modules
+        run: npm run test:extension
+
+      - name: Tests
+        run: |
+          npm run test:snapshot
+          npm run test:select
+          npm run test:registry
+          npm run test:popup
+
+      - name: Bridge server type-checks
+        run: npm run test:bridge
+
+      - name: Harnesses (bridge round-trip, multi-profile)
+        run: |
+          npm run test:mock
+          npm run test:profiles
+
+      # ── THIS FORK'S ONLY ADDITION TO THIS FILE. It runs the real relay from packages/relay
+      #    against the real Kilogent transport, which is the one thing upstream cannot cover: the
+      #    wire format has two hand-written ends and this is where they are made to agree.
+      - name: Kilogent transport against a real relay
+        run: npm run test:kilogent
+
+      - name: Package the extension
+        # A loadable zip on every PR: what you hand somebody to sideload, and what a Web Store
+        # upload takes. The Release attaches its own; this one is for reviewing a change.
+        id: zip
+        run: |
+          set -euo pipefail
+          V=$(node -p "require('./packages/extension/manifest.json').version")
+          zip -qr "$RUNNER_TEMP/extension-$V.zip" packages/extension -x '*/node_modules/*' '*.DS_Store'
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          ls -lh "$RUNNER_TEMP/extension-$V.zip"
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: extension-${{ steps.zip.outputs.version }}
+          path: ${{ runner.temp }}/extension-${{ steps.zip.outputs.version }}.zip
+          if-no-files-found: error
+
+  relay:
+    name: Relay
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # FULL HISTORY. Without it the resolver cannot reach the boundary commit and the preview
+          # below fails on every run — a permanent red annotation on a passing build, which is how
+          # people learn to ignore annotations.
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+
+      - name: Type-check and unit tests
+        run: npm run test:relay
+
+      - name: Pure logic — version arithmetic and release notes
+        # The release path's maths and its rendering should not be first exercised in production.
+        run: |
+          npm run test:version
+          npm run test:notes
+
+      - name: The published tarball actually runs
+        run: npm run test:tarball
+
+      - name: What the next release would be
+        # Informational. `continue-on-error` because a PR from a FORK cannot read npm's gitHead for
+        # a private-ish boundary, and that is not this PR's fault.
+        continue-on-error: true
+        run: npm run versions

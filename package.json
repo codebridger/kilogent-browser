@@ -1,7 +1,11 @@
 {
   "name": "kilogent-browser",
+  "releasePackages": [
+    "extension"
+  ],
   "version": "0.1.0",
   "private": true,
+  "license": "Apache-2.0",
   "workspaces": [
     "packages/*"
   ],
@@ -14,16 +18,27 @@
     "test:mock": "npm run build --workspace=packages/bridge-server && node scripts/mock-harness.mjs",
     "test:profiles": "npm run build --workspace=packages/bridge-server && node scripts/mock-profiles-harness.mjs",
     "install:all": "npm install --workspaces",
-    "test:kilogent": "node scripts/kilogent-harness.mjs",
     "test:snapshot": "node scripts/snapshot-narrow-test.mjs",
     "test:select": "node scripts/select-option-test.mjs",
     "test:registry": "node scripts/registry-test.mjs",
-    "test:popup": "node scripts/popup-test.mjs"
+    "test:popup": "node scripts/popup-test.mjs",
+    "build:relay": "npm run build -w packages/relay",
+    "test:relay": "npm run typecheck -w packages/relay && npm run test:unit -w packages/relay",
+    "test:version": "node scripts/resolve-versions.mjs --self-test",
+    "test": "npm run test:workflows && npm run test:lockfile && npm run test:ci-parity && npm run test:extension && npm run test:version && npm run test:notes && npm run test:snapshot && npm run test:select && npm run test:registry && npm run test:kilogent && npm run test:popup && npm run test:relay && npm run test:bridge && npm run test:mock && npm run test:profiles && npm run test:tarball",
+    "test:lockfile": "node scripts/check-lockfile.mjs",
+    "versions": "node scripts/resolve-versions.mjs --preview",
+    "test:notes": "node scripts/release-notes.mjs --self-test",
+    "test:extension": "node scripts/check-extension.mjs",
+    "test:bridge": "npm run typecheck --workspace=packages/bridge-server",
+    "test:tarball": "npm run build -w packages/relay && node scripts/check-tarball.mjs",
+    "test:ci-parity": "node scripts/check-ci-parity.mjs",
+    "test:workflows": "node scripts/check-workflows.mjs",
+    "test:kilogent": "npm run build:relay && node scripts/kilogent-harness.mjs"
   },
   "devDependencies": {
-    "@lumi.ai/relay": "^0.1.2",
-    "ws": "^8.21.3",
-    "happy-dom": "^20.11.2"
-  },
-  "license": "Apache-2.0"
+    "happy-dom": "^20.11.2",
+    "js-yaml": "^5.2.3",
+    "ws": "^8.21.3"
+  }
 }
