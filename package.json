@@ -18,7 +18,11 @@
     "test:snapshot": "node scripts/snapshot-narrow-test.mjs",
     "test:select": "node scripts/select-option-test.mjs",
     "test:registry": "node scripts/registry-test.mjs",
-    "test:popup": "node scripts/popup-test.mjs"
+    "test:popup": "node scripts/popup-test.mjs",
+    "build:relay": "npm run build -w packages/relay",
+    "test:relay": "npm run typecheck -w packages/relay && npm run test:unit -w packages/relay",
+    "test:version": "node scripts/resolve-relay-version.mjs --self-test",
+    "test": "npm run test:snapshot && npm run test:select && npm run test:registry && npm run test:popup && npm run test:relay && npm run test:version && npm run test:mock && npm run test:profiles"
   },
   "devDependencies": {
     "happy-dom": "^20.11.2",

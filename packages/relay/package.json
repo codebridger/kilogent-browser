@@ -1,0 +1,65 @@
+{
+  "name": "@lumi.ai/relay",
+  "version": "0.1.2",
+  "type": "module",
+  "description": "Browser relay \u2014 holds one WebSocket per connected browser so agents can drive it. Pluggable auth; presence and dispatch only.",
+  "//public": "PUBLIC PACKAGE, PUBLIC SOURCE. It lived in a private repo while it was Lumi infrastructure; it is side 2 of the open suite now and the source is here. The npm NAME is still @lumi.ai/relay \u2014 renaming it would change every install command and force a reinstall on every box, and that is a decision to take once, deliberately, not a side effect of moving a directory.",
+  "bin": {
+    "lumi-relay": "dist/cli/index.js"
+  },
+  "main": "./dist/cli/index.js",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "license": "Apache-2.0",
+  "author": "CodeBridger",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/navidshad/remote-browser-mcp.git",
+    "directory": "packages/relay"
+  },
+  "bugs": {
+    "url": "https://github.com/navidshad/remote-browser-mcp/issues"
+  },
+  "keywords": [
+    "browser",
+    "relay",
+    "websocket",
+    "mcp",
+    "agents",
+    "cli",
+    "chrome-extension"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc",
+    "//prepublishOnly": "dist/ is gitignored and `files` ships only it, so a publish from a fresh checkout that skipped the build would produce a tarball whose `bin` points at a file that is not in it \u2014 installable, and broken on every invocation. Runs on `npm publish` only, never on `npm ci`.",
+    "prepublishOnly": "npm run build",
+    "start": "node dist/cli/index.js start",
+    "//test:unit": "Typecheck the tests, THEN run them \u2014 crew-shared's pattern. The build tsconfig excludes `src/**/*.test.ts` because `dist/` is published, and excluded from the build means excluded from `tsc --noEmit` too; without the first half the tests are the one part of the package nothing type-checks.",
+    "test:unit": "tsc -p tsconfig.test.json && vitest run",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
+    "//build": "CLEAN FIRST. `tsc` never deletes, so a file removed from src/ lingers in dist/ forever on a working copy \u2014 and `check-browser-ticket-parity.mjs` imports dist/ by path. Moving ticket.ts under providers/ left a stale dist/ticket.js that the guard would have kept verifying, green, against code no longer in the repo. CI never sees it (fresh checkout); a laptop always does."
+  },
+  "//deps": "Everything here must resolve from the PUBLIC registry, since `npm i -g` installs it on a machine with no access to this repo. The relay deliberately depends on no @lumi/* package: it is presence and dispatch, it holds no Crew types, and keeping it standalone is what lets it be built and published without the rest of the monorepo.",
+  "dependencies": {
+    "commander": "^15.0.0",
+    "picocolors": "^1.1.1",
+    "ws": "^8.18.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.12",
+    "typescript": "^5.6.3",
+    "vitest": "^3.2.4"
+  },
+  "homepage": "https://github.com/navidshad/remote-browser-mcp/tree/main/packages/relay#readme",
+  "//version": "DERIVED, not typed. scripts/resolve-relay-version.mjs walks the commits since the last release; the value here is only a seed for a first publish. Do not bump it by hand \u2014 see .github/workflows/release-relay.yml."
+}

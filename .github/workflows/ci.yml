@@ -1,0 +1,137 @@
+name: CI
+
+# Every push and every PR. Two things ship from this repo — the extension (loaded unpacked or
+# zipped for the Web Store) and the relay (published to npm) — so both are checked here, and the
+# release workflow does not re-run any of it.
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  extension:
+    name: Extension
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+
+      # THE EXTENSION HAS NO BUILD STEP, on purpose: the directory you read is the directory Chrome
+      # loads, which is most of why somebody can audit what they are about to give control of their
+      # browser to. So "build" here means prove it is loadable and packageable.
+      - name: Manifest is valid JSON and names files that exist
+        run: |
+          set -euo pipefail
+          node -e '
+            const fs = require("fs"), path = require("path");
+            const dir = "packages/extension";
+            const m = JSON.parse(fs.readFileSync(path.join(dir, "manifest.json"), "utf8"));
+            const missing = [];
+            const check = (p) => { if (p && !fs.existsSync(path.join(dir, p))) missing.push(p); };
+            check(m.action?.default_popup);
+            check(m.background?.service_worker);
+            for (const icon of Object.values(m.icons ?? {})) check(icon);
+            for (const cs of m.content_scripts ?? []) for (const js of cs.js ?? []) check(js);
+            if (missing.length) { console.error("manifest names files that do not exist:", missing); process.exit(1); }
+            if (m.manifest_version !== 3) { console.error("not MV3"); process.exit(1); }
+            console.log(`${m.name} ${m.version} — manifest ok, MV3, ${m.permissions.length} permissions`);
+          '
+
+      - name: Every module the extension ships parses
+        # `node --check` on each file. It cannot prove Chrome will load them, but a syntax error in
+        # a service worker is otherwise invisible until the extension is installed and silently
+        # does nothing.
+        run: |
+          set -euo pipefail
+          find packages/extension -name '*.js' -not -path '*/node_modules/*' -print0 \
+            | xargs -0 -n1 node --check
+          echo "all extension modules parse"
+
+      - name: Tests
+        run: |
+          npm run test:snapshot
+          npm run test:select
+          npm run test:registry
+          npm run test:popup
+
+      - name: Bridge server type-checks
+        run: npm run typecheck --workspace=packages/bridge-server
+
+      - name: Harnesses (bridge round-trip, multi-profile)
+        run: |
+          npm run test:mock
+          npm run test:profiles
+
+      - name: Package the extension
+        # A loadable zip on every commit: what you hand somebody to sideload, and what a Web Store
+        # upload takes. Version in the name so two artifacts are never confused.
+        run: |
+          set -euo pipefail
+          V=$(node -p "require('./packages/extension/manifest.json').version")
+          (cd packages/extension && zip -qr "$RUNNER_TEMP/extension-$V.zip" . -x '*/node_modules/*' '*.DS_Store')
+          ls -lh "$RUNNER_TEMP/extension-$V.zip"
+          echo "zip=$RUNNER_TEMP/extension-$V.zip" >> "$GITHUB_ENV"
+          echo "name=extension-$V" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.name }}
+          path: ${{ env.zip }}
+          if-no-files-found: error
+
+  relay:
+    name: Relay
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+
+      - name: Type-check (source and tests)
+        run: npm run typecheck -w packages/relay
+
+      - name: Unit tests
+        run: npm run test:unit -w packages/relay
+
+      - name: Build
+        run: npm run build -w packages/relay
+
+      - name: The version resolver's own arithmetic
+        # Pure logic, no git and no network. The release path's version maths should not be first
+        # exercised in production.
+        run: node scripts/resolve-relay-version.mjs --self-test
+
+      - name: What the next release would be
+        # Informational, and the reason it never fails the build: on a PR from a fork, or before the
+        # first publish from this repo, the boundary commit is legitimately unresolvable.
+        continue-on-error: true
+        run: node scripts/resolve-relay-version.mjs --preview
+
+      - name: The published tarball actually runs
+        # The one thing no unit test covers: that the ARTIFACT works. The tests run `dist/` by path,
+        # so they stay green through a broken `bin` mapping or a file missing from `files`.
+        run: |
+          set -euo pipefail
+          TARBALL=$(cd packages/relay && npm pack --silent --pack-destination "$RUNNER_TEMP")
+          mkdir -p "$RUNNER_TEMP/smoke" && cd "$RUNNER_TEMP/smoke"
+          npm init -y >/dev/null
+          npm i --no-audit --no-fund "$RUNNER_TEMP/$TARBALL"
+          OUT=$(./node_modules/.bin/lumi-relay --version)
+          echo "lumi-relay --version -> $OUT"
+          test -n "$OUT"
