@@ -17,6 +17,21 @@ name: Release
 # built and released; the release simply says the relay did not ship. That is the property separate
 # files were wanted for, and `if: always()` on the last job is what provides it.
 #
+# WHICH PACKAGES THIS REPO RELEASES is the repository VARIABLE `RELEASE_PACKAGES` (a comma-separated
+# list of resolver keys; unset means all of them). It exists so a branded FORK can inherit this file
+# byte for byte — a fork must not publish the relay to npm under a name it does not own, and making
+# that an edit here would mean conflicting on this file at every merge from upstream. Configuration,
+# not code; the same rule the extension's provider seam follows.
+#
+#   gh variable set RELEASE_PACKAGES --body 'extension' --repo <owner>/<fork>
+#
+# A repo can also declare it in package.json as `"releasePackages": ["extension"]`, which is what a
+# fork should prefer: a variable is invisible in a checkout and survives neither a transfer nor a
+# fork-of-a-fork. The variable OVERRIDES the declaration, so a one-off run still needs no commit.
+#
+# An excluded package is still resolved and still listed in the release — a fork's notes should say
+# which relay its extension expects — it simply never publishes.
+#
 # ⚠️ npm MATCHES A TRUSTED PUBLISHER ON THE WORKFLOW FILENAME as well as the org and repo. This
 # file is `release.yml`; renaming it breaks publishing until npmjs.com is updated to match.
 
@@ -58,6 +73,11 @@ jobs:
         run: npm test
       - name: Resolve
         id: v
+        env:
+          # Unset in this repository, so everything releases. A fork narrows it. An unknown key is
+          # refused rather than ignored, so a typo fails the run instead of quietly releasing
+          # nothing.
+          RELEASE_PACKAGES: ${{ vars.RELEASE_PACKAGES }}
         run: |
           set -euo pipefail
           node scripts/resolve-versions.mjs --preview

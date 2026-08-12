@@ -24,6 +24,10 @@
 
 /** How a package's line should read, given what actually happened to it. */
 export function stateFor(pkg, { relayResult, relayPublished }) {
+  // A package this repository does not release still gets a ROW, because a fork's release should
+  // say which relay its extension expects. It must not read "unchanged", which claims this repo
+  // looked and found nothing — it never looked.
+  if (pkg.excluded) return 'from upstream';
   if (pkg.key !== 'relay') return pkg.release ? '**new**' : 'unchanged';
   if (!pkg.release) return 'unchanged';
   // ANYTHING THAT IS NOT AN OUTRIGHT SUCCESS IS "did not publish". Listing only `failure` would
@@ -77,6 +81,15 @@ function selfTest() {
   }
   eq('an unchanged relay ignores the job outcome entirely',
      stateFor({ ...relay, release: false }, { relayResult: 'failure' }), 'unchanged');
+  // A fork does not release the relay. Its row must not claim this repo checked and found nothing,
+  // and — the one that actually bites — must not read as a FAILED publish just because the job it
+  // depends on was skipped.
+  eq('an excluded package says where it comes from',
+     stateFor({ ...relay, release: false, excluded: true }, { relayResult: 'skipped' }), 'from upstream');
+  eq('an excluded package is not reported as a failed publish',
+     stateFor({ ...relay, excluded: true }, { relayResult: 'failure' }), 'from upstream');
+  eq('exclusion applies to any package, not just the relay',
+     stateFor({ ...ext, excluded: true, release: false }, {}), 'from upstream');
 
   const body = renderNotes({ packages: [ext, relay] }, { relayResult: 'success', relayPublished: 'yes' });
   eq('the version is wrapped in backticks', body.includes('| `1.0.0` |'), true);

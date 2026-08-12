@@ -32,6 +32,17 @@
  *              no external record to ask; the tag IS the record, and the release workflow pushes it
  *              only after the release succeeded.
  *
+ * WHICH PACKAGES THIS REPOSITORY RELEASES is configuration, not code. `RELEASE_PACKAGES` — a
+ * comma-separated list of keys — narrows it; unset means all of them.
+ *
+ * That exists for FORKS. A branded fork inherits `release.yml` verbatim, and must not publish the
+ * relay to npm under a name it does not own. Making that a repo VARIABLE rather than an edit to the
+ * workflow is what keeps the file byte-identical on both sides, so `git merge upstream/main` stays
+ * clean forever — the same rule the extension's provider seam follows.
+ *
+ * An excluded package is still RESOLVED and still reported, because a fork's release should say
+ * which relay its extension is meant to work with. It simply never releases.
+ *
  * Usage:
  *   node scripts/resolve-versions.mjs             # JSON, for the workflow
  *   node scripts/resolve-versions.mjs --preview   # human-readable
@@ -63,6 +74,37 @@ export const PACKAGES = [
     npm: 'remote-browser-relay',
   },
 ];
+
+/**
+ * Which package keys this repository releases, from `RELEASE_PACKAGES`.
+ *
+ * Unset or empty means ALL — the default has to be "everything", or a fork that forgets the
+ * variable silently stops releasing rather than loudly over-releasing. An UNKNOWN key is an error
+ * rather than a no-op: a typo'd name would otherwise read as "release nothing" and look like the
+ * pipeline is simply quiet.
+ */
+export function releasableKeys(raw, allKeys, declared) {
+  // The ENVIRONMENT wins, then what the repository itself declares, then everything. The middle
+  // rung exists because a repo variable is invisible in a checkout: it does not survive a transfer,
+  // a fork-of-a-fork, or anyone reading the repo to find out what it publishes. Declaring it in
+  // package.json puts it under review with the code. The variable stays as the override, which is
+  // what makes a one-off run possible without a commit.
+  const source = raw != null && String(raw).trim() !== '' ? raw : declared;
+  const listed = (Array.isArray(source) ? source.join(',') : (source ?? ''))
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (listed.length === 0) return { keys: allKeys, filtered: false };
+  const unknown = listed.filter((k) => !allKeys.includes(k));
+  if (unknown.length > 0) {
+    throw new Error(
+      `RELEASE_PACKAGES names ${unknown.map((k) => JSON.stringify(k)).join(', ')}, which ` +
+        `${unknown.length === 1 ? 'is not a package' : 'are not packages'} in this repository. ` +
+        `Known: ${allKeys.join(', ')}.`,
+    );
+  }
+  return { keys: listed, filtered: true };
+}
 
 /**
  * The conventional-commit header. Everything after the colon is prose we do not read.
@@ -144,8 +186,35 @@ function boundaryFor(spec) {
   return { kind: 'tag', ref: tag, base: tag.slice(spec.tagPrefix.length) };
 }
 
-function resolve(spec) {
+function resolve(spec, releasable) {
   const current = currentVersion(spec);
+
+  // An excluded package skips the BOUNDARY resolution entirely — no `git log`, and no failing
+  // closed on a gitHead this checkout cannot resolve. What it must not skip is the version, and
+  // the version in the repo is NOT the answer: `package.json` is only a seed here, stamped at
+  // publish time and never committed back, so a fork reading it would advertise a relay version
+  // that has been superseded on npm for months.
+  //
+  // So it asks the registry, and FAILS SOFT — a release must never die because a package it was
+  // never going to publish could not be looked up. The repo's seed is the fallback.
+  if (releasable && !releasable.includes(spec.key)) {
+    const published = spec.npm ? tryShell(`npm view ${spec.npm} version`) : null;
+    return {
+      key: spec.key,
+      label: spec.label,
+      release: false,
+      version: published || current,
+      current,
+      bump: 'none',
+      base: null,
+      commits: [],
+      excluded: true,
+      reason: published
+        ? `not released from this repository (RELEASE_PACKAGES); ${published} is what npm serves`
+        : 'not released from this repository (RELEASE_PACKAGES)',
+    };
+  }
+
   const boundary = boundaryFor(spec);
 
   if (boundary.kind === 'unresolvable') {
@@ -209,6 +278,79 @@ function selfTest() {
   const eq = (name, actual, expected) =>
     cases.push([name, JSON.stringify(actual) === JSON.stringify(expected), actual, expected]);
 
+  // ── RELEASE_PACKAGES ──
+  const allKeys = PACKAGES.map((p) => p.key);
+  const threw = (fn) => {
+    try {
+      fn();
+      return null;
+    } catch (err) {
+      return err.message;
+    }
+  };
+
+  eq('unset releases everything', releasableKeys(undefined, allKeys).keys, allKeys);
+  eq('an empty value releases everything', releasableKeys('', allKeys).keys, allKeys);
+  eq('whitespace releases everything', releasableKeys('  ,  ', allKeys).keys, allKeys);
+  eq('unset is not "filtered"', releasableKeys(undefined, allKeys).filtered, false);
+  eq('the repo can declare it in package.json',
+     releasableKeys(undefined, allKeys, ['extension']).keys, ['extension']);
+  eq('a declared array is accepted as an array, not stringified wrongly',
+     releasableKeys(undefined, allKeys, ['extension', 'relay']).keys, ['extension', 'relay']);
+  eq('the environment OVERRIDES what the repo declares',
+     releasableKeys('relay', allKeys, ['extension']).keys, ['relay']);
+  eq('an empty environment value falls THROUGH to the declaration, not to everything',
+     releasableKeys('', allKeys, ['extension']).keys, ['extension']);
+  eq('neither set still means everything', releasableKeys(undefined, allKeys, undefined).keys, allKeys);
+  cases.push([
+    'a bad key in the DECLARATION is refused too',
+    threw(() => releasableKeys(undefined, allKeys, ['nope'])) !== null,
+    true,
+    true,
+  ]);
+  eq('one key narrows to it', releasableKeys('extension', allKeys).keys, ['extension']);
+  eq('a narrowed list is "filtered"', releasableKeys('extension', allKeys).filtered, true);
+  eq('trims and splits', releasableKeys(' extension , relay ', allKeys).keys, ['extension', 'relay']);
+  cases.push([
+    'an unknown key is refused, not ignored',
+    (threw(() => releasableKeys('extenson', allKeys)) ?? '').includes('"extenson"'),
+    true,
+    true,
+  ]);
+  cases.push([
+    'the refusal lists what IS known',
+    (threw(() => releasableKeys('nope', allKeys)) ?? '').includes(allKeys.join(', ')),
+    true,
+    true,
+  ]);
+  cases.push([
+    'a good key alongside a bad one still refuses',
+    threw(() => releasableKeys('extension,nope', allKeys)) !== null,
+    true,
+    true,
+  ]);
+
+  // The short-circuit itself: an excluded package must report its repo version and no release, and
+  // must do so WITHOUT consulting the boundary — the assertion that it names no `base` is what
+  // proves the npm lookup was skipped.
+  {
+    const spec = PACKAGES.find((p) => p.key === 'relay');
+    const r = resolve(spec, ['extension']);
+    eq('an excluded package does not release', r.release, false);
+    eq('an excluded package is marked excluded', r.excluded, true);
+    eq('an excluded package skips the boundary lookup', r.base, null);
+    // Network-free: `npm` is not consulted for a spec with no npm name, so this exercises the
+    // fallback deterministically. The live lookup is covered by the workflow's own preview.
+    const noRegistry = { ...spec, npm: null };
+    eq(
+      'an excluded package with no registry falls back to the repo version',
+      resolve(noRegistry, ['extension']).version,
+      currentVersion(spec),
+    );
+    const kept = resolve(spec, ['extension', 'relay']);
+    cases.push(['a listed package is NOT short-circuited', kept.excluded === undefined, true, true]);
+  }
+
   eq('parses a plain type', parseSubject('fix: a thing').type, 'fix');
   eq('parses a scope', parseSubject('feat(relay): a thing').scope, 'relay');
   eq('parses the breaking bang', parseSubject('feat(relay)!: a thing').breaking, true);
@@ -264,7 +406,19 @@ const RUN_DIRECTLY = process.argv[1] && import.meta.url === `file://${process.ar
 if (RUN_DIRECTLY && process.argv.includes('--self-test')) {
   selfTest();
 } else if (RUN_DIRECTLY) {
-  const results = PACKAGES.map(resolve);
+  const allKeys = PACKAGES.map((p) => p.key);
+  let releasable;
+  try {
+    releasable = releasableKeys(
+      process.env.RELEASE_PACKAGES,
+      allKeys,
+      JSON.parse(fs.readFileSync('package.json', 'utf8')).releasePackages,
+    ).keys;
+  } catch (err) {
+    console.error(`✗ ${err.message}`);
+    process.exit(1);
+  }
+  const results = PACKAGES.map((spec) => resolve(spec, releasable));
   const errors = results.filter((r) => r.error);
   if (errors.length > 0) {
     for (const e of errors) console.error(`✗ ${e.label}: ${e.error}`);
@@ -277,7 +431,9 @@ if (RUN_DIRECTLY && process.argv.includes('--self-test')) {
       console.log(`  in the repo    : ${r.current}`);
       console.log(`  last released  : ${r.base ?? '(never)'}`);
       console.log(`  bump           : ${r.bump}`);
-      console.log(`  next version   : ${r.release ? r.version : '(no release)'}`);
+      console.log(
+        `  next version   : ${r.release ? r.version : r.excluded ? '(not released here)' : '(no release)'}`,
+      );
       console.log(`  why            : ${r.reason}`);
       for (const c of r.commits) console.log(`    · ${c}`);
     }
