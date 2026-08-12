@@ -1,4 +1,4 @@
-// `lumi-relay update` — a deliberately short ladder, and the shortness is the decision.
+// `update` — a deliberately short ladder, and the shortness is the decision.
 //
 // The Crew runner's self-update (Lumi PRD §15.37) is ten rungs, an `updating` flag distinct from
 // `shuttingDown`, an attempt counter, and a mirror of its phase into Firestore. It has to be: it
@@ -25,10 +25,16 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { constants as fsConstants } from "node:fs";
-import { cliPath, serviceStatus } from "../service.js";
+import { cliPath, serviceStatus, SERVICE_LABEL, LINUX_UNIT } from "../service.js";
 import { RELAY_NAME, RELAY_VERSION } from "../version.js";
 
-export const PACKAGE_NAME = "@lumi.ai/relay";
+/**
+ * What `npm i -g` installs. It was `@lumi.ai/relay`, and the shape changed with the name: an
+ * UNSCOPED package is one path segment under `node_modules`, a scoped one is two. Everything below
+ * derives its marker from this constant rather than spelling the path out, so that difference is
+ * handled by `path.sep`-joining the name instead of by remembering it.
+ */
+export const PACKAGE_NAME = "remote-browser-relay";
 
 export type InstallMode = "global-npm" | "checkout";
 
@@ -49,12 +55,12 @@ export type UpdateDecision =
  * Is this CLI a published package, or a working copy?
  *
  * Keyed on the package directory appearing in the path, which is what `npm i -g` produces
- * (`…/lib/node_modules/@lumi.ai/relay/dist/…`). A git checkout, an `npm link`, and a
+ * (`…/lib/node_modules/remote-browser-relay/dist/…`). A git checkout, an `npm link`, and a
  * `node dist/cli/index.js` from the repo all fall through to `checkout` — which is correct, since
  * `npm i -g` would not update any of them.
  */
 export function detectInstallMode(cli: string): InstallMode {
-  return cli.includes(`node_modules${path.sep}${PACKAGE_NAME.replace("/", path.sep)}${path.sep}`)
+  return cli.includes(`node_modules${path.sep}${PACKAGE_NAME.split("/").join(path.sep)}${path.sep}`)
     ? "global-npm"
     : "checkout";
 }
@@ -103,8 +109,8 @@ function run(command: string, args: string[]): { ok: boolean; out: string } {
  * module we imported, because the whole question is what is on disk NOW.
  */
 export function installedVersionAt(cli: string): string | null {
-  // …/@lumi.ai/relay/dist/cli/index.js → …/@lumi.ai/relay/package.json
-  const marker = `node_modules${path.sep}${PACKAGE_NAME.replace("/", path.sep)}${path.sep}`;
+  // …/remote-browser-relay/dist/cli/index.js → …/remote-browser-relay/package.json
+  const marker = `node_modules${path.sep}${PACKAGE_NAME.split("/").join(path.sep)}${path.sep}`;
   const at = cli.indexOf(marker);
   if (at < 0) return null;
   const pkgDir = cli.slice(0, at + marker.length);
@@ -164,9 +170,9 @@ export function runUpdate(options: { channel?: string; restart?: boolean } = {})
       status: "needs-root",
       message:
         `${writable.dir} is not writable by this user, so \`npm i -g\` cannot run here.\n\n` +
-        "  sudo npm i -g @lumi.ai/relay@latest\n" +
+        `  sudo npm i -g ${PACKAGE_NAME}@latest\n` +
         `  ${RELAY_NAME} service restart\n\n` +
-        // The reason this is TWO commands rather than `sudo lumi-relay update`, which looks like
+        // The reason this is TWO commands rather than `sudo ${RELAY_NAME} update`, which looks like
         // the obvious shortcut and is wrong: the restart goes through `systemctl --user`, and
         // under sudo that addresses ROOT's user manager, not the account whose unit is running
         // the relay. The install would succeed and the running process would never be replaced.
@@ -216,14 +222,14 @@ export function runUpdate(options: { channel?: string; restart?: boolean } = {})
   const restart = run(
     process.platform === "linux" ? "systemctl" : "launchctl",
     process.platform === "linux"
-      ? ["--user", "restart", "lumi-relay.service"]
-      : ["kickstart", "-k", `gui/${process.getuid?.() ?? 0}/com.lumi.relay`]
+      ? ["--user", "restart", LINUX_UNIT]
+      : ["kickstart", "-k", `gui/${process.getuid?.() ?? 0}/${SERVICE_LABEL}`]
   );
   return {
     status: "updated",
     message: restart.ok
       ? `${before} → ${after}, service restarted`
-      : `${before} → ${after}. The restart failed (${restart.out}) — run \`lumi-relay service restart\`.`,
+      : `${before} → ${after}. The restart failed (${restart.out}) — run \`${RELAY_NAME} service restart\`.`,
     from: before,
     to: after,
   };

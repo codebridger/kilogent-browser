@@ -1,22 +1,27 @@
-# `@lumi.ai/relay` — the hosted relay
+# `remote-browser-relay`
 
-`lumi-relay` is one process holding one WebSocket per connected browser, so a product can address a
-Chrome sitting on somebody's laptop.
+One process holding one WebSocket per connected browser, so a product can address a Chrome sitting
+on somebody's laptop.
 
-**It is on its way to being open source, and this package is deliberately generic.** Nothing here
-imports a `@lumi/*` package or knows what a Ship is; who a browser belongs to is decided by a
-pluggable **auth provider** (`src/providers/`), and Lumi is one caller rather than the only one. The
-plan and its phases are in `~/.claude/plans/open-browser-suite.md`; this package is where phase 2
-landed. Until the move it is published from this repo as `@lumi.ai/relay`, the same
-public-package/private-source arrangement `@lumi.ai/runner` has.
+```bash
+npm i -g remote-browser-relay      # the release
+npm i -g remote-browser-relay@dev  # the pre-release
+```
 
-## Its other half lives in another repo
+**It is deliberately generic.** Nothing here knows what your product is: who a browser belongs to
+is decided by a pluggable **auth provider** in [`src/providers/`](src/providers), and two ship —
+`ticket` (short-lived HMAC credentials minted by whatever owns your accounts) and `token` (static
+secrets, for trying it out). Adding a third is a directory and one line.
 
-The browser end is the **Lumi Browser extension**, in
-[`navidshad/remote-browser-mcp`](https://github.com/navidshad/remote-browser-mcp) — public, because
-a customer about to grant an extension control of their logged-in Chrome should be able to read it
-first. That repo also holds `packages/bridge-server`, which is a **different program, not a flag on
-this one**:
+⚠️ **It was published as `@lumi.ai/relay` until 2026-08-11.** A box installed before then keeps
+working with nothing done by hand: the CLI reads the old `~/.lumi-relay/` when the new directory is
+absent, still honours `LUMI_RELAY_HOME`, and `service install` moves the directory and removes the
+old unit — once. See [`src/paths.ts`](src/paths.ts).
+
+## It is not the whole story
+
+The browser end is the **MV3 extension** in [`../extension`](../extension), and the agent end is
+[`../bridge-server`](../bridge-server) — which is a **different program, not a flag on this one**:
 
 |  | `bridge-server` (self-host) | `relay` |
 |---|---|---|
@@ -26,51 +31,9 @@ this one**:
 | Serves MCP | yes — the agent connects here | **no** — the browser tools are served by the caller |
 | Decides who may drive a browser | whoever holds the token | the caller, from live state, on every call |
 
-**So the wire protocol has two ends in two repos, with nothing linking them at compile time.**
-That is the price of the split and it is paid the way P9 pays for the `@lumi/crew-shared` ↔
-`crew-functions` duplication: [`src/protocol.ts`](src/protocol.ts) is the authority, the extension
-carries its own copy, and a change to a frame shape has to land in both. The alternative — keeping
-the relay next to the extension — put our hostnames, ports and box contents in a public README, and
-that pressure recurs every time somebody writes down a runbook step.
-
-## What it is not
-
-**It is not an authorization boundary.** The relay knows nothing about workspaces, agents,
-permission windows or blocklists. It answers exactly two questions: *is this browser here*, and
-*deliver this to it*. Everything about whether a given agent may drive a given browser right now is
-decided by the caller, from live state, on every single call — so a permission revoked five seconds
-ago stops the next action, with no state to invalidate here.
-
-That split is a rule, not an accident, and it is why an auth provider is asked *who are you* and
-never *may you*: the relay has no live state, so a policy cached here would keep saying yes after
-somebody revoked it. See [`src/providers/types.ts`](src/providers/types.ts).
-
-**It holds no account credential.** The extension signs in to whatever owns the accounts and keeps
-that credential to itself; it trades it — with the system that already handles such credentials —
-for a ticket that does one thing: open a socket. So a relay compromise is a relay compromise, not
-an account compromise for everybody connected to it. See
-[`src/providers/ticket/ticket.ts`](src/providers/ticket/ticket.ts).
-
-## Auth providers
-
-`RELAY_AUTH` picks one. Two ship:
-
-| | `ticket` (default) | `token` |
-|---|---|---|
-| Credential | HMAC-signed, 10 minutes, fetched per socket | a static secret per machine |
-| Identity | carried in the credential | the machine's name in `RELAY_TOKENS` |
-| Needs | a system that mints tickets with the same key | nothing |
-| Revoking a machine | stop minting for it | edit the file, restart |
-| For | a product with accounts | trying this out, or one person's own boxes |
-
-`relay ticket --owner me --browser mac` mints one with whichever provider is configured, so
-`ticket` is usable before you have written the other half. `token` has no mint and says so by name.
-
-**A fork adds its own** in `src/providers/<name>/`, plus one line in
-[`src/providers/index.ts`](src/providers/index.ts). Nothing outside that directory changes, which is
-what keeps `git merge upstream/main` clean. Verification must be LOCAL — a signature, or a secret
-already held — because `verifyBrowser` runs on every reconnect and `verifyDispatch` on every single
-command.
+**The wire protocol has two ends**, and [`src/protocol.ts`](src/protocol.ts) is the authority; the
+extension carries its own copy, and a change to a frame shape has to land in both. They are in one
+repository now, which is what makes that checkable at all.
 
 ## The two faces, and the one port
 
@@ -99,9 +62,9 @@ which is why every frame after it is schema-validated with bounds — see
 ## Installing it
 
 ```bash
-lumi-relay setup            # writes ~/.lumi-relay/relay.env and mints the two keys
-lumi-relay service install  # systemd --user unit (launchd on macOS, for development)
-lumi-relay doctor           # every question worth asking before blaming the relay
+remote-browser-relay setup            # writes ~/.remote-browser-relay/relay.env and mints the two keys
+remote-browser-relay service install  # systemd --user unit (launchd on macOS, for development)
+remote-browser-relay doctor           # every question worth asking before blaming the relay
 ```
 
 `setup` prints the two keys **once**, to copy into the caller's own secret store. It is
@@ -131,10 +94,10 @@ rather than `exec`. Running from a git checkout, it says so and gives you the `g
 On a fresh box, in order:
 
 ```bash
-lumi-relay setup --port <port> --instance-id <a-name-for-this-box>
-lumi-relay service install
+remote-browser-relay setup --port <port> --instance-id <a-name-for-this-box>
+remote-browser-relay service install
 sudo loginctl enable-linger "$USER"   # or the unit stops the moment you log out
-lumi-relay doctor
+remote-browser-relay doctor
 ```
 
 Then point something at it — a Cloudflare named tunnel, or whatever terminates TLS in front of the
@@ -165,12 +128,12 @@ header on every dispatch — over the tunnel, through Cloudflare, into anything 
 The other is a *signing* key: whoever holds it can mint a ticket and connect as somebody else's
 browser. A signing key must never be the thing you put in a header hundreds of times a minute.
 
-They live in `~/.lumi-relay/relay.env` at **0600 inside a 0700 directory**, and the systemd unit
+They live in `~/.remote-browser-relay/relay.env` at **0600 inside a 0700 directory**, and the systemd unit
 reads that file with `EnvironmentFile=` rather than carrying the values. That distinction is
 load-bearing: a unit file is world-readable under `~/.config/systemd/user`, and `systemctl show`
 prints its environment to anyone who can ask.
 
-An environment variable always beats the file, so a one-off `RELAY_PORT=9000 lumi-relay start`
+An environment variable always beats the file, so a one-off `RELAY_PORT=9000 remote-browser-relay start`
 does what it looks like.
 
 ## What health actually measures

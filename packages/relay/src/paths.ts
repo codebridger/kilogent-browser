@@ -1,8 +1,11 @@
-// Where the relay keeps its state: `~/.lumi-relay/`, overridable with `LUMI_RELAY_HOME`.
+// Where the relay keeps its state: `~/.remote-browser-relay/`, overridable with
+// `REMOTE_BROWSER_RELAY_HOME`.
 //
-// ⚠️ THAT DIRECTORY NAME IS NOT DERIVED FROM THE PACKAGE, deliberately — see the same note in
-// service.ts. It is a path on disk on running boxes, and a rename would leave a live relay's
-// configuration somewhere the new build does not look.
+// IT WAS `~/.lumi-relay/`, and a box that predates the rename still has one. `configDir()` READS
+// the old location when the new one is absent, so an installed relay keeps working across the
+// rename with nothing to do by hand — and `service install` moves it, once, so the compatibility
+// path is a bridge rather than a permanent second home. Both the old env var and the old directory
+// are honoured; neither is written to any more.
 //
 // ONE FILE, AND IT IS AN ENV FILE, not JSON. Everything the relay needs to be configured with is
 // either a secret or a number systemd already knows how to hand a process, so `relay.env` is both
@@ -14,13 +17,58 @@
 // see service.ts, where that distinction is load-bearing rather than fastidious.
 
 import fs from "node:fs";
+import { RELAY_NAME } from "./version.js";
 import os from "node:os";
 import path from "node:path";
 
-export const DIR_NAME = ".lumi-relay";
+export const DIR_NAME = ".remote-browser-relay";
+/** What this was called before the package was renamed. Read, never written. */
+export const LEGACY_DIR_NAME = ".lumi-relay";
 
+/** The home an explicit override names, new variable first. */
+function overrideHome(): string | undefined {
+  return process.env.REMOTE_BROWSER_RELAY_HOME || process.env.LUMI_RELAY_HOME || undefined;
+}
+
+/**
+ * Where state lives.
+ *
+ * PREFERS THE NEW DIRECTORY, falls back to the old one ONLY if the old exists and the new does
+ * not. That order matters: after a migration both may exist for a moment, and picking the old one
+ * then would silently strand every write the new one had already taken.
+ */
 export function configDir(): string {
-  return process.env.LUMI_RELAY_HOME || path.join(os.homedir(), DIR_NAME);
+  const override = overrideHome();
+  if (override) return override;
+  const next = path.join(os.homedir(), DIR_NAME);
+  if (fs.existsSync(next)) return next;
+  const legacy = path.join(os.homedir(), LEGACY_DIR_NAME);
+  if (fs.existsSync(legacy)) return legacy;
+  return next;
+}
+
+/** The old directory, if this box has one and has not been migrated. Null otherwise. */
+export function legacyConfigDir(): string | null {
+  if (overrideHome()) return null;
+  const legacy = path.join(os.homedir(), LEGACY_DIR_NAME);
+  const next = path.join(os.homedir(), DIR_NAME);
+  if (fs.existsSync(legacy) && !fs.existsSync(next)) return legacy;
+  return null;
+}
+
+/**
+ * Move the old directory to the new name. Returns what happened.
+ *
+ * A RENAME, not a copy: two directories holding the same two long-lived keys is exactly the state
+ * where somebody edits the wrong one. It refuses if the destination already exists rather than
+ * merging, because merging two configurations is a guess.
+ */
+export function migrateLegacyConfigDir(): { moved: boolean; from?: string; to?: string } {
+  const legacy = legacyConfigDir();
+  if (!legacy) return { moved: false };
+  const next = path.join(os.homedir(), DIR_NAME);
+  fs.renameSync(legacy, next);
+  return { moved: true, from: legacy, to: next };
 }
 
 export function envFile(): string {
@@ -68,7 +116,7 @@ export function parseEnvFile(text: string): Record<string, string> {
 
 export function serializeEnvFile(values: Record<string, string>): string {
   const header = [
-    "# lumi-relay configuration.",
+    `# ${RELAY_NAME} configuration.`,
     "#",
     "# Read by BOTH the daemon and systemd (`EnvironmentFile=`), so keep it to plain KEY=value:",
     "# no interpolation, no `export`, no multi-line values. See packages/relay/README.md.",
@@ -105,7 +153,7 @@ export function writeEnvFile(values: Record<string, string>): string {
  *
  * The precedence is the important half. Under systemd the values arrive as real environment
  * variables and this is a no-op; run by hand, the file fills them in. A variable exported in the
- * shell always wins, so a one-off `RELAY_PORT=9000 lumi-relay start` does what it looks like.
+ * shell always wins, so a one-off `RELAY_PORT=9000 <relay> start` does what it looks like.
  */
 export function loadEnvFileIntoProcess(): void {
   for (const [key, value] of Object.entries(readEnvFile())) {

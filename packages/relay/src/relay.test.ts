@@ -184,7 +184,9 @@ describe("control plane auth", () => {
     assert.equal(res.status, 200);
     const body = (await res.json()) as Record<string, unknown>;
     assert.equal(body.status, "ok");
-    assert.equal(body.service, "lumi-relay");
+    // Derived from `bin`, so this asserts the wiring rather than a literal — a rename that
+    // forgot version.ts would show up here.
+    assert.equal(body.service, "remote-browser-relay");
     // The lesson from the bridge's /health: this endpoint is deliberately reachable without a
     // credential, so it must never describe a specific human's browser.
     assert.equal("browsers" in body, false);

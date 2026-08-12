@@ -10,7 +10,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const HOME = fs.mkdtempSync(path.join(os.tmpdir(), "lumi-relay-test-"));
+const HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-test-"));
 process.env.LUMI_RELAY_HOME = HOME;
 
 const { parseEnvFile, serializeEnvFile, readEnvFile, writeEnvFile, envFile, loadEnvFileIntoProcess } =
@@ -18,7 +18,7 @@ const { parseEnvFile, serializeEnvFile, readEnvFile, writeEnvFile, envFile, load
 const { runSetup } = await import("./cli/setup.js");
 const { systemdUnit, plistXml, parseSystemdCliPath, parseSystemdEnvFile, parsePlistCliPath, escapeXml, unescapeXml, NOFILE_LIMIT } =
   await import("./service.js");
-const { planUpdate, detectInstallMode } = await import("./cli/update.js");
+const { planUpdate, detectInstallMode, PACKAGE_NAME } = await import("./cli/update.js");
 const { planTicket } = await import("./cli/ticket.js");
 const { isSecretVar, maskConfigValue } = await import("./cli/secrets.js");
 
@@ -171,10 +171,13 @@ describe("the launchd plist", () => {
 });
 
 describe("the update ladder", () => {
+  // Built from PACKAGE_NAME rather than spelled out, so the fixture cannot disagree with the
+  // marker the code matches on. It disagreed once: the package went from scoped to unscoped, which
+  // is one path segment fewer, and a hard-coded `@lumi.ai/relay` fixture kept asserting the old
+  // shape while the code looked for the new one.
   const globalCli = path.join(
     "/usr/local/lib/node_modules",
-    "@lumi.ai",
-    "relay",
+    ...PACKAGE_NAME.split("/"),
     "dist",
     "cli",
     "index.js"
@@ -226,7 +229,7 @@ describe("the update ladder", () => {
 });
 
 describe("the update ladder on a root-owned prefix", () => {
-  it("refuses with two commands, not `sudo lumi-relay update`", async () => {
+  it("refuses with two commands, not one `sudo` that restarts as root", async () => {
     // Found by running `update` on the real box: a machine whose node came from the system
     // package manager has an npm prefix of /usr, so `npm i -g` needs root.
     //
@@ -238,10 +241,10 @@ describe("the update ladder on a root-owned prefix", () => {
     const { runUpdate } = await import("./cli/update.js");
     const outcome = runUpdate({});
     if (outcome.status === "needs-root") {
-      assert.match(outcome.message, /sudo npm i -g @lumi\.ai\/relay@latest/);
-      assert.match(outcome.message, /lumi-relay service restart/);
+      assert.ok(outcome.message.includes(`sudo npm i -g ${PACKAGE_NAME}@latest`));
+      assert.match(outcome.message, /service restart/);
       assert.match(outcome.message, /root's user\s+manager/);
-      assert.doesNotMatch(outcome.message, /sudo lumi-relay update\b(?!.*would)/s);
+      assert.doesNotMatch(outcome.message, /sudo \S+ update\b(?!.*would)/s);
     } else {
       // This machine's prefix IS writable, so the rung is unreachable here — assert the ladder
       // still refuses for one of its other reasons rather than silently trying to publish.

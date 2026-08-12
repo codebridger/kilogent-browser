@@ -1,8 +1,8 @@
-// The relay's log file — `~/.lumi-relay/logs/relay.log`, rotated at 5 MB keeping 3 generations.
+// The relay's log file — `<config dir>/logs/relay.log`, rotated at 5 MB keeping 3 generations.
 //
 // Ported nearly verbatim from `packages/crew/runner/src/logging.ts`, and the reason it exists is
 // the same: once the process is a systemd unit nobody is watching stdout, and
-// `journalctl --user` is not available on every box this might end up on. `lumi-relay logs -f`
+// `journalctl --user` is not available on every box this might end up on. `<relay> logs -f`
 // reads this file.
 //
 // Writes are best-effort and NEVER throw. A full disk must not be what takes a relay down while

@@ -132,6 +132,6 @@ jobs:
           mkdir -p "$RUNNER_TEMP/smoke" && cd "$RUNNER_TEMP/smoke"
           npm init -y >/dev/null
           npm i --no-audit --no-fund "$RUNNER_TEMP/$TARBALL"
-          OUT=$(./node_modules/.bin/lumi-relay --version)
-          echo "lumi-relay --version -> $OUT"
+          OUT=$(./node_modules/.bin/remote-browser-relay --version)
+          echo "remote-browser-relay --version -> $OUT"
           test -n "$OUT"

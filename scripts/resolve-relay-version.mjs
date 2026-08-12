@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
- * Decide `@lumi.ai/relay`'s next version from the commits since its last release.
+ * Decide `remote-browser-relay`'s next version from the commits since its last release.
  *
  * WHAT THIS REPLACES. The version used to be typed by hand into
  * `packages/relay/package.json`, and `a hand-typed version guard` existed to stop
  * someone forgetting — because the publish job is idempotent, so a forgotten bump was INVISIBLE:
- * every check green, deploy green, release green, and `npm i -g @lumi.ai/runner@latest` quietly
+ * every check green, deploy green, release green, and `npm i -g <pkg>@latest` quietly
  * handing out the old binary. That is how the §8.1 Ship key shipped while every connected daemon
  * was told to upgrade to a version that did not exist.
  *
@@ -38,7 +38,7 @@
  */
 import { execSync } from 'node:child_process';
 
-const PKG = '@lumi.ai/relay';
+const PKG = 'remote-browser-relay';
 const PATHS = ['packages/relay'];
 
 /** Record/field separators — chosen because neither can appear in a commit message. */

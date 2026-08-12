@@ -34,7 +34,7 @@ export async function runDaemon(): Promise<RunningRelay> {
 
   const relay = await startRelay(config, log);
 
-  log(`lumi-relay ${RELAY_VERSION} (${config.instanceId}) — node ${process.version}`);
+  log(`${RELAY_NAME} ${RELAY_VERSION} (${config.instanceId}) — node ${process.version}`);
   log(`  control : http://${config.bindHost}:${relay.port}/v1/*  (bearer required)`);
   log(`  browsers: ws://${config.bindHost}:${relay.port}/ws      (ticket required)`);
   log(`  liveness: http://${config.bindHost}:${relay.port}/health`);

@@ -1,11 +1,11 @@
 {
-  "name": "@lumi.ai/relay",
-  "version": "0.1.2",
+  "name": "remote-browser-relay",
+  "version": "0.2.0",
   "type": "module",
   "description": "Browser relay \u2014 holds one WebSocket per connected browser so agents can drive it. Pluggable auth; presence and dispatch only.",
-  "//public": "PUBLIC PACKAGE, PUBLIC SOURCE. It lived in a private repo while it was Lumi infrastructure; it is side 2 of the open suite now and the source is here. The npm NAME is still @lumi.ai/relay \u2014 renaming it would change every install command and force a reinstall on every box, and that is a decision to take once, deliberately, not a side effect of moving a directory.",
+  "//public": "PUBLIC PACKAGE, PUBLIC SOURCE, and the name matches the repo. It was @lumi.ai/relay while it was one product's infrastructure; it is side 2 of an open suite now, and a scope nobody else can publish under was the wrong shape for that.",
   "bin": {
-    "lumi-relay": "dist/cli/index.js"
+    "remote-browser-relay": "dist/cli/index.js"
   },
   "main": "./dist/cli/index.js",
   "files": [

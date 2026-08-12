@@ -4,7 +4,7 @@ name: Release relay
 #   push to dev   ->  <version>-dev.<run_number>   on dist-tag `dev`
 #   push to main  ->  <version>                    on dist-tag `latest`
 #
-# So `npm i -g @lumi.ai/relay` gets the production release and `@lumi.ai/relay@dev` gets the
+# So `npm i -g remote-browser-relay` gets the production release and `remote-browser-relay@dev` gets the
 # pre-release, and the two lists never mix. A dev prerelease also SORTS BELOW the release it is
 # working towards (`0.3.0-dev.7` < `0.3.0`), so it can never outrank what is already on `latest`.
 #
@@ -195,8 +195,8 @@ jobs:
           mkdir -p "$RUNNER_TEMP/smoke" && cd "$RUNNER_TEMP/smoke"
           npm init -y >/dev/null
           npm i --no-audit --no-fund "$RUNNER_TEMP/$TARBALL"
-          OUT=$(./node_modules/.bin/lumi-relay --version)
-          echo "lumi-relay --version -> $OUT"
+          OUT=$(./node_modules/.bin/remote-browser-relay --version)
+          echo "remote-browser-relay --version -> $OUT"
           test "$OUT" = "${{ steps.v.outputs.version }}"
 
       - name: Publish

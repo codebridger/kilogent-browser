@@ -1,4 +1,4 @@
-// `lumi-relay doctor` — every question worth asking before deciding the relay is the problem.
+// `doctor` — every question worth asking before deciding the relay is the problem.
 //
 // The checks are DATA, not printing, so the ordering and the verdicts are testable without a box
 // to run them on. Three verdicts and they mean different things: `fail` is broken now, `warn` is

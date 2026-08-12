@@ -62,7 +62,7 @@ Browser tool names **mirror the official [Playwright MCP](https://github.com/mic
 |---|---|
 | [`packages/bridge-server`](packages/bridge-server) | VM-side bridge. MCP browser tools ⇄ WebSocket to the extension, with token auth, `/health`, and per-session tab tracking. Exposes `browser_*`, `check_local_status`, and `bridge_ping`. **This is the self-host path**, and the only server in this repo — if you are running this for yourself, this is the one you want. A hosted service that wants its own transport adds one under `packages/extension/src/providers/`; see "Adding your own transport" above. |
 | [`packages/extension`](packages/extension) | The MV3 Chrome extension. Popup for Agent URL + token, a service worker holding one outbound WS per profile (heartbeat + `chrome.alarms` keepalive + reconnect backoff), and a `chrome.debugger` executor. |
-| [`packages/relay`](packages/relay) | **Side 2 of the hosted path.** One process holding one WebSocket per connected browser, so a product can address a Chrome on somebody's laptop. Presence and dispatch only — it is not an authorization boundary, and who a browser is comes from a pluggable auth provider (`ticket` or `token`). Published to npm as `@lumi.ai/relay`; `npm i -g @lumi.ai/relay` for the release, `@dev` for the pre-release. |
+| [`packages/relay`](packages/relay) | **Side 2 of the hosted path.** One process holding one WebSocket per connected browser, so a product can address a Chrome on somebody's laptop. Presence and dispatch only — it is not an authorization boundary, and who a browser is comes from a pluggable auth provider (`ticket` or `token`). Published to npm as `remote-browser-relay`; `npm i -g remote-browser-relay` for the release, `@dev` for the pre-release. |
 | [`packages/agent`](packages/agent) | A standalone terminal agent — a stand-in for the VM's real client. Connects to the bridge and runs a tool-use loop. LLM is pluggable ([`src/llm`](packages/agent/src/llm)) — **Gemini** by default, Anthropic optional — with a no-API-key `smoke` test. |
 | [`packages/daemon`](packages/daemon) | Legacy local MCP sidecar (presence + session notifications) from the pre-bridge architecture. Kept for reference; superseded by the bridge. |
 
@@ -193,8 +193,8 @@ commit and attaches it as an artifact; that zip is what you sideload or upload t
 
 | Branch | Version | dist-tag | Install |
 |---|---|---|---|
-| `dev` | `<next>-dev.<run>` | `dev` | `npm i -g @lumi.ai/relay@dev` |
-| `main` | `<next>` | `latest` | `npm i -g @lumi.ai/relay` |
+| `dev` | `<next>-dev.<run>` | `dev` | `npm i -g remote-browser-relay@dev` |
+| `main` | `<next>` | `latest` | `npm i -g remote-browser-relay` |
 
 The version is **derived, never typed**. `scripts/resolve-relay-version.mjs` walks the commits
 since the last publish and picks the bump from conventional-commit subjects: `feat` is a minor,
