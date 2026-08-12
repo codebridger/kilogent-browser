@@ -1,177 +1,83 @@
-// Popup: manage multiple connection profiles (Agent URL + token), toggle each
-// on/off, and watch per-profile connection state. Profiles live in
-// chrome.storage.local; the service worker reconciles live connections whenever
-// we save.
-const $ = (id) => document.getElementById(id);
+// Popup: the shell, and nothing panel-specific.
+//
+// It creates one `<section>` per registered panel, mounts each, and drives them all from a single
+// status poll. Everything a particular way of connecting needs to show — profiles, sign-in, a
+// workspace list — belongs to that provider's panel under `src/providers/`, so `popup.html` and
+// this file are core and a fork edits neither.
+//
+// ONE POLL, NOT ONE PER PANEL. Two panels asking the worker for status on their own timers is two
+// wake-ups of a service worker that is trying to stay evicted, for one answer both of them want.
 
-const STATE_UI = {
-  init: { cls: "warn", text: "Starting…" },
-  unconfigured: { cls: "warn", text: "Not configured" },
-  connecting: { cls: "warn", text: "Connecting…" },
-  connected: { cls: "ok", text: "Connected" },
-  auth_error: { cls: "err", text: "Auth failed — check the token" },
-  disconnected: { cls: "err", text: "Disconnected — retrying…" },
+import { PANELS } from "./src/providers/panels.js";
+
+const REFRESH_MS = 1500;
+
+/** Never throws: a popup that dies because the worker was mid-restart is a popup that looks broken
+ *  for the one second it takes to come back. */
+async function send(msg) {
+  try {
+    return await chrome.runtime.sendMessage(msg);
+  } catch {
+    return {};
+  }
+}
+
+const deps = {
+  storage: chrome.storage.local,
+  send,
+  /** Open a URL in a new tab. Injected rather than left to the panel because a panel that reaches
+   *  for `chrome.tabs` directly cannot be loaded outside a browser, and any panel with a sign-in
+   *  flow needs exactly this one call. */
+  openTab: (url) => chrome.tabs.create({ url }),
 };
 
-let profiles = []; // local working copy
-let editingId = null;
+const root = document.getElementById("panels");
+const panels = PANELS.map((make) => make(deps));
 
-const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random());
+for (const panel of panels) {
+  const section = document.createElement("section");
+  section.className = "panel";
+  section.dataset.panel = panel.name;
 
-async function load() {
-  const { profiles: stored } = await chrome.storage.local.get("profiles");
-  profiles = Array.isArray(stored) ? stored : [];
-  render();
-}
-
-async function persist() {
-  await chrome.runtime.sendMessage({ type: "saveProfiles", profiles });
-  render();
-}
-
-async function getStatus() {
-  try {
-    return await chrome.runtime.sendMessage({ type: "getStatus" });
-  } catch (e) {
-    return { profiles: [] };
-  }
-}
-
-async function render() {
-  const snap = await getStatus();
-  const byId = new Map((snap?.profiles || []).map((p) => [p.id, p]));
-  const list = $("profiles");
-  list.textContent = "";
-
-  if (profiles.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "empty";
-    empty.textContent = "No profiles yet. Add one to connect a bridge.";
-    list.appendChild(empty);
-    return;
-  }
-
-  for (const p of profiles) {
-    const st = byId.get(p.id);
-    const ui = p.enabled ? STATE_UI[st?.connState] || STATE_UI.connecting : { cls: "", text: "Off" };
-
-    const row = document.createElement("div");
-    row.className = "profile";
-
-    const top = document.createElement("div");
-    top.className = "top";
-
-    const name = document.createElement("div");
-    name.className = "name";
-    name.textContent = (p.blockInput ? "🔒 " : "") + (p.name || "(unnamed)");
-    top.appendChild(name);
-
-    const sw = document.createElement("label");
-    sw.className = "switch";
-    const cb = document.createElement("input");
-    cb.type = "checkbox";
-    cb.checked = !!p.enabled;
-    cb.addEventListener("change", () => toggle(p.id, cb.checked));
-    const slider = document.createElement("span");
-    slider.className = "slider";
-    sw.appendChild(cb);
-    sw.appendChild(slider);
-    top.appendChild(sw);
-    row.appendChild(top);
-
-    const url = document.createElement("div");
-    url.className = "url";
-    url.textContent = p.agentUrl || "(no url)";
-    row.appendChild(url);
-
-    const state = document.createElement("div");
-    state.className = "state";
-    let stateText = "";
-    if (ui.cls) stateText = `<span class="dot ${ui.cls}"></span>`;
-    state.innerHTML = stateText;
-    const label = document.createElement("span");
-    let txt = ui.text;
-    if (p.enabled && st?.connState === "connected") {
-      txt += st.tabCount ? ` · ${st.tabCount} tab${st.tabCount === 1 ? "" : "s"}` : " · idle";
-    }
-    label.textContent = txt;
-    state.appendChild(label);
-    row.appendChild(state);
-
-    const actions = document.createElement("div");
-    actions.className = "actions";
-    const edit = document.createElement("button");
-    edit.className = "ghost";
-    edit.textContent = "Edit";
-    edit.addEventListener("click", () => openForm(p.id));
-    const del = document.createElement("button");
-    del.className = "ghost";
-    del.textContent = "Delete";
-    del.addEventListener("click", () => remove(p.id));
-    actions.appendChild(edit);
-    actions.appendChild(del);
-    row.appendChild(actions);
-
-    list.appendChild(row);
-  }
-}
-
-function toggle(id, enabled) {
-  const p = profiles.find((x) => x.id === id);
-  if (!p) return;
-  p.enabled = enabled;
-  persist();
-}
-
-function remove(id) {
-  profiles = profiles.filter((x) => x.id !== id);
-  if (editingId === id) closeForm();
-  persist();
-}
-
-// ── add / edit form ────────────────────────────────────────────────────────────
-function openForm(id) {
-  editingId = id ?? null;
-  const p = id ? profiles.find((x) => x.id === id) : null;
-  $("formTitle").textContent = p ? "Edit profile" : "New profile";
-  $("name").value = p?.name ?? "";
-  $("url").value = p?.agentUrl ?? "";
-  $("token").value = p?.accessToken ?? "";
-  $("blockInput").checked = !!p?.blockInput;
-  $("form").classList.remove("hidden");
-}
-
-function closeForm() {
-  editingId = null;
-  $("form").classList.add("hidden");
-}
-
-function saveForm() {
-  const name = $("name").value.trim();
-  const agentUrl = $("url").value.trim();
-  const accessToken = $("token").value.trim();
-  const blockInput = $("blockInput").checked;
-  if (!agentUrl) {
-    $("url").focus();
-    return;
-  }
-  if (editingId) {
-    const p = profiles.find((x) => x.id === editingId);
-    if (p) Object.assign(p, { name, agentUrl, accessToken, blockInput });
+  // A panel may declare itself SECONDARY by exposing a `summary`, and the shell folds it into a
+  // <details>. It lives here rather than in the panel because collapsing is a decision about the
+  // popup as a whole — which of several ways to connect is the ordinary one — and a panel cannot
+  // see the others. A fork expresses it in its own `panels.js`, without editing the panel.
+  if (panel.summary) {
+    const details = document.createElement("details");
+    const summary = document.createElement("summary");
+    summary.textContent = panel.summary;
+    details.appendChild(summary);
+    details.appendChild(section);
+    root.appendChild(details);
   } else {
-    profiles.push({ id: uuid(), name: name || "Bridge", agentUrl, accessToken, enabled: true, blockInput });
+    root.appendChild(section);
   }
-  closeForm();
-  persist();
+
+  try {
+    panel.mount(section);
+  } catch (err) {
+    // One panel failing to mount must not leave the others blank — the same isolation the worker's
+    // registry applies, for the same reason.
+    console.error(`[popup] ${panel.name} failed to mount:`, err);
+  }
 }
 
-$("add").addEventListener("click", () => openForm(null));
-$("cancel").addEventListener("click", closeForm);
-$("saveProfile").addEventListener("click", saveForm);
-$("reconnect").addEventListener("click", async () => {
-  await chrome.runtime.sendMessage({ type: "reconnect" });
-  setTimeout(render, 400);
+async function refresh() {
+  const snapshot = await send({ type: "getStatus" });
+  for (const panel of panels) {
+    try {
+      panel.render(snapshot || {});
+    } catch (err) {
+      console.error(`[popup] ${panel.name} failed to render:`, err);
+    }
+  }
+}
+
+document.getElementById("reconnect").addEventListener("click", async () => {
+  await send({ type: "reconnect" });
+  setTimeout(refresh, 400);
 });
 
-load();
-setInterval(render, 1500);
+refresh();
+setInterval(refresh, REFRESH_MS);

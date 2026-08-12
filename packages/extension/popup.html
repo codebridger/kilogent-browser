@@ -202,34 +202,15 @@
     <h1>Remote Browser Agent</h1>
     <p class="sub">Each profile is a bridge connection with its own isolated tabs. Toggle one on to connect.</p>
 
-    <div id="profiles" class="profiles"></div>
+    <!-- One <section> per registered panel, filled by that panel. Nothing provider-specific lives
+         in this file, which is what lets a fork add a way of connecting without editing it. -->
+    <div id="panels"></div>
 
     <div class="row">
-      <button id="add">+ Add profile</button>
       <button id="reconnect" class="secondary">Reconnect all</button>
     </div>
 
-    <div id="form" class="hidden">
-      <h2 id="formTitle">New profile</h2>
-      <label for="name">Name</label>
-      <input id="name" type="text" placeholder="e.g. Prod bridge" spellcheck="false" />
-
-      <label for="url">Agent URL</label>
-      <input id="url" type="text" placeholder="wss://aso-agent.subturtle.app/rbm-ws" spellcheck="false" />
-      <div class="hint">The VM bridge WebSocket endpoint (wss://).</div>
-
-      <label for="token">Access Token</label>
-      <input id="token" type="password" placeholder="paste the shared token" spellcheck="false" />
-
-      <label class="check"><input id="blockInput" type="checkbox" /> Block my input while the agent is acting</label>
-      <div class="hint">Suppresses your mouse/keyboard on this profile's tabs during agent activity, so you can't interfere mid-action.</div>
-
-      <div class="row">
-        <button id="saveProfile">Save</button>
-        <button id="cancel" class="secondary">Cancel</button>
-      </div>
-    </div>
-
-    <script src="popup.js"></script>
+    <!-- type="module" because the shell imports its panel list. -->
+    <script type="module" src="popup.js"></script>
   </body>
 </html>
