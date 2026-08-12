@@ -103,6 +103,12 @@ jobs:
           cache: npm
       - run: npm ci
 
+      - name: The lock file agrees with the workspaces
+        # `npm ci` above already refuses a drifted lock — this runs anyway so the failure NAMES the
+        # workspace instead of printing npm's usage text, and so the same check exists in `npm test`
+        # for a laptop, where `npm ci` is not what anybody runs.
+        run: npm run test:lockfile
+
       - name: Type-check (source and tests)
         run: npm run typecheck -w packages/relay
 
