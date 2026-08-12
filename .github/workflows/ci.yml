@@ -118,6 +118,11 @@ jobs:
       - name: Build
         run: npm run build -w packages/relay
 
+      - name: The release notes render, and the resolver's arithmetic
+        # Both are pure. The notes renderer is here because it used to be inline JS in the release
+        # workflow, where the only possible check was reading it — and a syntax error got through.
+        run: node scripts/release-notes.mjs --self-test
+
       - name: The version resolver's own arithmetic
         # Pure logic, no git and no network. The release path's version maths should not be first
         # exercised in production.

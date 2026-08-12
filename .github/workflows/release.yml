@@ -213,35 +213,14 @@ jobs:
           # be unchanged.
           TAG="v$(date -u +%Y.%m.%d).${GITHUB_RUN_NUMBER}"
           RELAY_V="${{ needs.resolve.outputs.relay_version }}"
-          node -e '
-            const fs = require("fs");
-            const r = JSON.parse(process.env.RESOLVED);
-            const relayResult = process.env.RELAY_RESULT;      // success | failure | skipped
-            const relayPublished = process.env.RELAY_PUBLISHED; // yes | skipped | ""
-            const lines = ["| Package | Version | This release |", "|---|---|---|"];
-            for (const p of r.packages) {
-              let state;
-              if (p.key === "relay") {
-                // Anything that is not an outright success is reported as NOT published. Listing
-                // only `failure` would let a cancelled or timed-out job be announced as shipped,
-                // and a release that names a version npm does not have is worse than a red build.
-                if (!p.release) state = "unchanged";
-                else if (relayResult !== "success") state = `⚠️ **did not publish** (${relayResult})`;
-                else if (relayPublished === "skipped") state = "already on npm";
-                else state = "**published to npm**";
-              } else {
-                state = p.release ? "**new**" : "unchanged";
-              }
-              lines.push(`| ${p.label} | \\`${p.version}\\` | ${state} |`);
-            }
-            lines.push("", "```bash", "npm i -g remote-browser-relay", "```", "",
-              "The extension is attached below — unzip it and load it unpacked at `chrome://extensions`.");
-            for (const p of r.packages.filter((x) => x.release && x.commits.length)) {
-              lines.push("", `### ${p.label}`, "");
-              for (const c of p.commits) lines.push(`- ${c}`);
-            }
-            fs.writeFileSync(process.env.RUNNER_TEMP + "/notes.md", lines.join("\n") + "\n");
-          '
+          # The body is rendered by a SCRIPT IN THE REPO, not by `node -e` here. It was inline and
+          # shipped a syntax error — a template literal needing a literal backtick — which killed
+          # this job AFTER the relay had published, leaving npm with a version GitHub had no release
+          # for. A file is the same bytes locally and in CI, and `scripts/release-notes.mjs` has a
+          # self-test; inline JS in YAML can only ever be eyeballed.
+          node scripts/release-notes.mjs > "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md"
+
           gh release create "$TAG" \
             --title "Extension $EXT · Relay $RELAY_V" \
             --notes-file "$RUNNER_TEMP/notes.md" \
