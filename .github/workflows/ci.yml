@@ -121,13 +121,13 @@ jobs:
       - name: The version resolver's own arithmetic
         # Pure logic, no git and no network. The release path's version maths should not be first
         # exercised in production.
-        run: node scripts/resolve-relay-version.mjs --self-test
+        run: node scripts/resolve-versions.mjs --self-test
 
       - name: What the next release would be
         # Informational, and the reason it never fails the build: on a PR from a fork, or before the
         # first publish from this repo, the boundary commit is legitimately unresolvable.
         continue-on-error: true
-        run: node scripts/resolve-relay-version.mjs --preview
+        run: node scripts/resolve-versions.mjs --preview
 
       - name: The published tarball actually runs
         # The one thing no unit test covers: that the ARTIFACT works. The tests run `dist/` by path,

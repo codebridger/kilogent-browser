@@ -61,5 +61,5 @@
     "vitest": "^3.2.4"
   },
   "homepage": "https://github.com/navidshad/remote-browser-mcp/tree/main/packages/relay#readme",
-  "//version": "DERIVED, not typed. scripts/resolve-relay-version.mjs walks the commits since the last release; the value here is only a seed for a first publish. Do not bump it by hand \u2014 see .github/workflows/release-relay.yml."
+  "//version": "DERIVED, not typed. scripts/resolve-versions.mjs walks the commits since the last release; the value here is only a seed for a first publish. Do not bump it by hand \u2014 see .github/workflows/release.yml."
 }

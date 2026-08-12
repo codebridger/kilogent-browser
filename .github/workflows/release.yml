@@ -1,0 +1,235 @@
+name: Release
+
+# ONE RELEASE PER MERGE TO MAIN, covering every package.
+#
+# A release here is a SNAPSHOT of the repo, not one package's event. A merge might change the
+# extension, the relay, both or neither — and the release that follows always states where ALL of
+# them stand, so somebody reading the Releases page can tell which extension goes with which relay.
+# The extension zip is attached EVERY time for the same reason: the latest release must always be a
+# place you can download a working extension from, even when the change was elsewhere.
+#
+# WHAT IS SKIPPED IS THE PUBLISHING, NOT THE RELEASE. `scripts/resolve-versions.mjs` path-filters
+# each package independently, so a relay-only change does not republish an identical extension —
+# the release simply lists the extension's unchanged version. If NOTHING changed anywhere, no
+# release is cut at all.
+#
+# The `dev` branch publishes the relay as a prerelease on npm's `dev` tag and cuts NO GitHub
+# Release: a pre-release is for whoever asked for it by name, not something to announce.
+#
+# ⚠️ npm MATCHES A TRUSTED PUBLISHER ON THE WORKFLOW FILENAME as well as the org and repo. This
+# file is `release.yml`; if it is renamed, publishing fails until npmjs.com is updated to match.
+
+on:
+  push:
+    branches: [main, dev]
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write # create the Release, push the per-package tags
+  id-token: write # npm trusted publishing (OIDC)
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # FULL HISTORY AND TAGS. The resolver walks `git log <boundary>..HEAD` and reads
+          # `git describe --tags` for the extension; a shallow clone resolves neither and the job
+          # would fail closed on every run.
+          fetch-depth: 0
+
+      # NO `registry-url` HERE. setup-node unconditionally writes
+      # `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}` into an .npmrc, and with no token in
+      # the environment that expands to an EMPTY token. npm then believes auth is configured, never
+      # starts the OIDC exchange, and the publish dies with `E404 ... you do not have permission` —
+      # which reads exactly like a missing trusted publisher and is not. (actions/setup-node#1551.)
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      # ⚠️ npm@latest is npm 12, which requires node ^22.22.2. `.nvmrc` must stay at or above that
+      # or this step fails with EBADENGINE before anything is published — which is exactly how the
+      # first release attempt died, on a .nvmrc of 22.17.1.
+      - name: Upgrade npm for trusted publishing
+        run: npm i -g npm@latest
+
+      - name: Assert no npm auth is configured
+        # OIDC engages only when npm finds NO credentials, so prove that BEFORE publishing. Without
+        # this, a bad trusted-publisher registration and a stray empty token produce the identical
+        # `E404 ... you do not have permission`.
+        run: |
+          echo "npm $(npm -v), node $(node -v)"
+          if [ -n "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::error::NODE_AUTH_TOKEN is set. npm will use it instead of OIDC. Remove it."
+            exit 1
+          fi
+          TOKEN_CFG=$(npm config get //registry.npmjs.org/:_authToken 2>/dev/null || echo undefined)
+          case "$TOKEN_CFG" in
+            undefined|null|'') echo "No token configured — OIDC is free to engage." ;;
+            *) echo "::error::An npm authToken is configured. It shadows OIDC."; exit 1 ;;
+          esac
+
+      - run: npm ci
+
+      - name: Verify
+        run: npm test
+
+      - name: Resolve every package's version
+        id: v
+        run: |
+          set -euo pipefail
+          node scripts/resolve-versions.mjs --preview
+          RESOLVED=$(node scripts/resolve-versions.mjs)
+          echo "resolved<<EOF"  >> "$GITHUB_OUTPUT"
+          echo "$RESOLVED"      >> "$GITHUB_OUTPUT"
+          echo "EOF"            >> "$GITHUB_OUTPUT"
+          pick() { node -p "JSON.parse(process.argv[1]).packages.find(p=>p.key==='$1').$2" "$RESOLVED"; }
+          {
+            echo "any=$(node -p 'JSON.parse(process.argv[1]).any' "$RESOLVED")"
+            echo "ext_release=$(pick extension release)"
+            echo "ext_version=$(pick extension version)"
+            echo "relay_release=$(pick relay release)"
+            echo "relay_version=$(pick relay version)"
+          } >> "$GITHUB_OUTPUT"
+
+      # ── the relay ─────────────────────────────────────────────────────────────────────────
+      - name: Stamp and publish the relay
+        id: relay
+        if: steps.v.outputs.relay_release == 'true'
+        env:
+          IS_MAIN: ${{ github.ref_name == 'main' }}
+          BASE: ${{ steps.v.outputs.relay_version }}
+        run: |
+          set -euo pipefail
+          if [ "$IS_MAIN" = "true" ]; then
+            VERSION="$BASE"; TAG="latest"
+          else
+            # The run number is monotonic and never resets, so two dev builds of one base version
+            # cannot collide. `0.3.0-dev.7` also sorts BELOW `0.3.0`, which is right: the base is
+            # the version being worked TOWARDS.
+            VERSION="${BASE}-dev.${GITHUB_RUN_NUMBER}"; TAG="dev"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG"         >> "$GITHUB_OUTPUT"
+
+          PUBLISHED=$(npm view remote-browser-relay versions --json 2>/dev/null || echo '[]')
+          if node -e 'let l=[];try{l=JSON.parse(process.argv[2])}catch{};if(!Array.isArray(l))l=[l];process.exit(l.includes(process.argv[1])?0:1)' "$VERSION" "$PUBLISHED"; then
+            echo "::notice::remote-browser-relay@$VERSION is already published — skipping."
+            echo "published=no" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Before the build: version.ts reads package.json at runtime and the daemon reports it, so
+          # stamping afterwards ships a build whose reported version disagrees with the registry.
+          npm pkg set version="$VERSION" -w packages/relay
+          npm run build -w packages/relay
+          npm publish -w packages/relay --tag "$TAG" --access public
+          echo "published=yes" >> "$GITHUB_OUTPUT"
+
+      # ── the extension ─────────────────────────────────────────────────────────────────────
+      - name: Stamp the extension
+        if: steps.v.outputs.ext_release == 'true' && github.ref_name == 'main'
+        # The manifest version is what Chrome shows and what the Web Store orders by. Never
+        # committed back — the checkout is throwaway; the tag is what records it.
+        run: |
+          node -e '
+            const fs = require("fs");
+            const p = "packages/extension/manifest.json";
+            const m = JSON.parse(fs.readFileSync(p, "utf8"));
+            m.version = process.argv[1];
+            fs.writeFileSync(p, JSON.stringify(m, null, 2) + "\n");
+            console.log("manifest stamped to " + m.version);
+          ' "${{ steps.v.outputs.ext_version }}"
+
+      - name: Package the extension
+        # ALWAYS, even when the extension did not change — the latest release must always be a
+        # place somebody can download a working extension from.
+        id: zip
+        run: |
+          set -euo pipefail
+          V=$(node -p "require('./packages/extension/manifest.json').version")
+          ZIP="$RUNNER_TEMP/extension-$V.zip"
+          (cd packages/extension && zip -qr "$ZIP" . -x '*/node_modules/*' '*.DS_Store')
+          echo "path=$ZIP"    >> "$GITHUB_OUTPUT"
+          echo "version=$V"   >> "$GITHUB_OUTPUT"
+          ls -lh "$ZIP"
+
+      # ── the release ───────────────────────────────────────────────────────────────────────
+      - name: Cut the GitHub Release
+        if: github.ref_name == 'main' && steps.v.outputs.any == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESOLVED: ${{ steps.v.outputs.resolved }}
+        run: |
+          set -euo pipefail
+          # Date plus run number: monotonic, sortable, and it can never collide — which a
+          # package version cannot promise here, since two packages version independently and
+          # either may be unchanged.
+          TAG="v$(date -u +%Y.%m.%d).${GITHUB_RUN_NUMBER}"
+          EXT="${{ steps.zip.outputs.version }}"
+          RELAY_V="${{ steps.v.outputs.relay_version }}"
+          TITLE="Extension $EXT · Relay $RELAY_V"
+
+          node -e '
+            const r = JSON.parse(process.env.RESOLVED);
+            const rows = r.packages.map((p) => {
+              const state = p.release ? `**${p.version}** — new` : `${p.version} — unchanged`;
+              return `| ${p.label} | ${state} |`;
+            });
+            const changed = r.packages.filter((p) => p.release && p.commits.length);
+            const notes = [
+              "| Package | Version |",
+              "|---|---|",
+              ...rows,
+              "",
+              "```bash",
+              "npm i -g remote-browser-relay",
+              "```",
+              "",
+              "The extension is attached below — unzip it and load it unpacked at `chrome://extensions`.",
+            ];
+            for (const p of changed) {
+              notes.push("", `### ${p.label} — what changed`, "");
+              for (const c of p.commits) notes.push(`- ${c}`);
+            }
+            require("fs").writeFileSync(process.env.RUNNER_TEMP + "/notes.md", notes.join("\n") + "\n");
+          '
+
+          gh release create "$TAG" \
+            --title "$TITLE" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            --target "$GITHUB_SHA" \
+            "${{ steps.zip.outputs.path }}#Chrome extension (unpacked, v$EXT)"
+          echo "::notice::Released $TAG — $TITLE"
+
+      - name: Tag each package that actually released
+        # AFTER the release succeeded, never before: the extension's tag IS its boundary for the
+        # next run, so writing it early would make a failed release look like a shipped one and
+        # silently skip those commits forever.
+        if: github.ref_name == 'main' && steps.v.outputs.any == 'true'
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ "${{ steps.v.outputs.ext_release }}" = "true" ]; then
+            git tag -f "extension-v${{ steps.zip.outputs.version }}" "$GITHUB_SHA"
+            git push -f origin "extension-v${{ steps.zip.outputs.version }}"
+          fi
+          # The relay needs no tag — npm's own gitHead is its boundary, and it cannot drift from
+          # what was actually published the way a tag we write can.
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "| Package | Version | Released |"
+            echo "|---|---|---|"
+            echo "| Chrome extension | ${{ steps.zip.outputs.version }} | ${{ steps.v.outputs.ext_release }} |"
+            echo "| remote-browser-relay | ${{ steps.v.outputs.relay_version }} | ${{ steps.v.outputs.relay_release }} |"
+          } >> "$GITHUB_STEP_SUMMARY"

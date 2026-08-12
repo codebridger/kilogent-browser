@@ -184,34 +184,44 @@ npm run smoke --workspace=packages/agent
 
 ## Releases
 
-Two things ship, and they ship differently.
+**One release per merge to `main`, covering every package.** A release here is a snapshot of the
+repo: it always states where *all* packages stand, so you can tell which extension goes with which
+relay. The extension zip is attached every time, even when the change was elsewhere — the latest
+release must always be somewhere you can download a working extension from.
 
-**The extension** has no build step — the directory is what Chrome loads. CI zips it on every
-commit and attaches it as an artifact; that zip is what you sideload or upload to the Web Store.
+What is skipped is the *publishing*, not the release: `scripts/resolve-versions.mjs` path-filters
+each package independently, so a relay-only change does not republish an identical extension. If
+nothing changed anywhere, no release is cut.
 
-**The relay** publishes to npm on two channels:
+| Package | Where it goes | How to get it |
+|---|---|---|
+| Chrome extension | attached to the GitHub Release | download, unzip, load unpacked |
+| `remote-browser-relay` | npm | `npm i -g remote-browser-relay` |
 
-| Branch | Version | dist-tag | Install |
-|---|---|---|---|
-| `dev` | `<next>-dev.<run>` | `dev` | `npm i -g remote-browser-relay@dev` |
-| `main` | `<next>` | `latest` | `npm i -g remote-browser-relay` |
+`dev` publishes the relay as a prerelease on npm's `dev` tag (`npm i -g remote-browser-relay@dev`)
+and cuts **no** GitHub Release — a pre-release is for whoever asked for it by name.
 
-The version is **derived, never typed**. `scripts/resolve-relay-version.mjs` walks the commits
-since the last publish and picks the bump from conventional-commit subjects: `feat` is a minor,
-a `!` or a `BREAKING CHANGE:` footer is a major, everything else is a patch.
+```bash
+npm run versions      # what the next release would be, and why
+```
 
-Two rules in that script are worth knowing before you change it:
+### Versions are derived, never typed
+
+From conventional-commit subjects: `feat` is a minor, a `!` or a `BREAKING CHANGE:` footer is a
+major, everything else is a patch. Two rules are load-bearing:
 
 - **The path filter decides *whether* to release; the type only decides *how big*.** Any commit
-  touching `packages/relay/**` releases. An unrecognised type — `chore`, `ci`, `refactor`, an
+  touching a package's own paths releases it. An unrecognised type — `chore`, `ci`, `refactor`, an
   unparseable subject — falls through to a PATCH rather than to "no release". The conventional way
-  round, where only `feat`/`fix` release, means a `refactor(relay):` that changes the shipped
-  bundle publishes nothing and says it succeeded.
+  round, where only `feat`/`fix` release, means a `refactor(relay):` that changes the shipped bundle
+  publishes nothing and reports success.
 - **While the major is 0, a breaking change bumps the MINOR** rather than jumping to 1.0.0.
   Reaching 1.0.0 should be somebody's decision.
 
-The boundary is npm's own `gitHead` for the published version, so there is nothing to tag and
-nothing to push. If it cannot be resolved, the job **fails closed** rather than guessing.
+**Two packages, two boundaries**, and the difference is not an inconsistency. The relay's is npm's
+own `gitHead` for the published version — it cannot drift from what was actually published, which a
+tag can. The extension is published to no registry, so an `extension-v*` git tag *is* its record,
+pushed only after the release succeeded.
 
 ## Development
 
