@@ -280,7 +280,14 @@ export function createKilogentTransport(deps) {
     if (!kilogent) {
       kilogent = new KilogentConnection(id, {
         WebSocketCtor: deps.WebSocketCtor,
-        makeExecutor: (pushStatus, label) => new Executor(pushStatus, label),
+        // The policy core asks, and the arming core awaits. Both arrows close over `kilogent`,
+        // which is still being assigned on this very line — safe because neither is CALLED until a
+        // command runs, long after the constructor has returned.
+        makeExecutor: (pushStatus, label) =>
+          new Executor(pushStatus, label, {
+            allowUrl: (url, ctx) => kilogent.allowUrl(url, ctx),
+            onAttached: (chromeTabId) => kilogent.armTab(chromeTabId),
+          }),
         mintTicket: async () => {
           const token = await getIdToken(storage);
           if (!token) {
@@ -316,6 +323,19 @@ export function createKilogentTransport(deps) {
       // the same test to its own tabs.
       if (source?.tabId != null && kilogent?.ownsTab(source.tabId))
         kilogent.routeDetach(source, reason);
+    },
+
+    /**
+     * A paused request, on its way to a verdict.
+     *
+     * NOT gated on `ownsTab` the way detach and tab-close are, and the difference is the point:
+     * those two are NOTIFICATIONS, so ignoring one that is not ours costs nothing. This is a
+     * QUESTION the browser is holding a page open for. `Fetch` is only ever enabled on tabs this
+     * transport armed, so an event naming a tab it no longer recognises means the worker was
+     * evicted and lost its index — and the handler refuses it rather than leaving the tab hanging.
+     */
+    onDebuggerEvent(source, method, params) {
+      void kilogent?.onDebuggerEvent(source, method, params);
     },
 
     onTabRemoved(tabId) {

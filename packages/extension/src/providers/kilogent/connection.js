@@ -62,6 +62,81 @@ export class KilogentConnection {
   }
 
   /** The effective policy for a session: the Ship's list ∪ this machine's own. */
+  /**
+   * MAY THIS TAB BE WHERE IT IS? — `Executor`'s `allowUrl`, answered from this connection's lists.
+   *
+   * The second of the two doors, and the one that closes the gap: the argument check below can only
+   * judge a URL a tool NAMED, and a click names none. Core asks this after every action with
+   * wherever the tab actually ended up, so a link, a 30x and a meta-refresh are all covered.
+   *
+   * Returns the SENTENCE rather than `false`, because core hands a string straight to the agent and
+   * this transport should keep its own wording.
+   */
+  allowUrl(url, ctx) {
+    return this.deps.isBlocked(url, this.blocklistFor(ctx?.sessionId))
+      ? "That address is blocked on this browser. Ask its owner, or a captain — you cannot change this yourself."
+      : true;
+  }
+
+  /**
+   * Arm request interception on a tab, awaited by core before the first command runs.
+   *
+   * DOCUMENT REQUESTS ONLY. Unscoped interception pauses every image, font and XHR — 30-300 per
+   * ordinary page — and each is a round trip through this single service worker, which is also
+   * carrying the 20-second heartbeat this connection dies without. Scoped to documents it is one
+   * pause per navigation plus one per redirect hop.
+   *
+   * This is what makes the blocklist PREVENT rather than merely refuse: `Fetch.requestPaused` fires
+   * before the socket opens, so a blocked origin receives no connection, no TLS handshake and none
+   * of the person's cookies.
+   */
+  async armTab(chromeTabId) {
+    await this.executor.sendCdp(chromeTabId, "Fetch.enable", {
+      patterns: [{ requestStage: "Request", resourceType: "Document" }],
+    });
+  }
+
+  /**
+   * Answer a paused request.
+   *
+   * ⚠️ IT MUST NEVER TAKE THE TAB LOCK. The paused request is holding the page's load, and the lock
+   * is held by whatever command caused the navigation — waiting for it waits for a load that is
+   * waiting for this. `executor.sendCdp` is a bare `chrome.debugger.sendCommand` and takes no lock,
+   * which is exactly why it is used here rather than any of the command helpers.
+   *
+   * ⚠️ UNKNOWN STATE FAILS THE REQUEST. `tabIndex` and `sessionBlocklists` live in memory, and MV3
+   * evicts this worker whenever it likes; an event that wakes it back up finds both empty. Treating
+   * "I do not recognise this tab" as "allow" is precisely the hole being closed, so it refuses — and
+   * it must REFUSE rather than return, because a paused request nobody answers hangs the tab until
+   * Chrome gives up on it.
+   */
+  async onDebuggerEvent(source, method, params) {
+    if (method !== "Fetch.requestPaused") return;
+    const tabId = source?.tabId;
+    const requestId = params?.requestId;
+    if (typeof tabId !== "number" || !requestId) return;
+
+    const idx = this.executor.tabIndex.get(tabId);
+    const url = params?.request?.url;
+    const allowed =
+      !!idx && typeof url === "string" && !this.deps.isBlocked(url, this.blocklistFor(idx.sessionId));
+
+    try {
+      if (allowed) {
+        await this.executor.sendCdp(tabId, "Fetch.continueRequest", { requestId });
+      } else {
+        await this.executor.sendCdp(tabId, "Fetch.failRequest", {
+          requestId,
+          errorReason: "BlockedByClient",
+        });
+        this.deps.log?.("[kilogent] blocked a navigation", url ?? "(unknown)");
+      }
+    } catch (e) {
+      // The target detached between the pause and the answer. Nothing is left to answer to, and the
+      // navigation died with it.
+    }
+  }
+
   blocklistFor(sessionId) {
     const ship = this.sessionBlocklists.get(sessionId) ?? [];
     return this.deps.effectiveBlocklist(ship, this.deps.ownBlocklist());
@@ -219,8 +294,14 @@ export class KilogentConnection {
   async handleCmd(m) {
     const args = m.args || {};
     // Checked HERE as well as in Crew, because a URL can also arrive without any tool naming it —
-    // a click on a link. This arm catches the one an argument names; `Executor`'s own
-    // post-navigation assertion catches the rest.
+    // a click on a link. This arm catches the one an argument names.
+    //
+    // THE REST IS NOW ACTUALLY COVERED, and this comment used to claim it already was: it said
+    // "`Executor`'s own post-navigation assertion catches the rest" when no such assertion existed
+    // — `grep block executor.js` returned only `blockInput`. Two things cover it now: `allowUrl`,
+    // which core asks after every action with wherever the tab ended up, and `Fetch.requestPaused`,
+    // which refuses the request before it leaves the browser at all. This arm stays because it is
+    // the LEGIBLE refusal — it answers the agent in a sentence, before any tab moves.
     if (typeof args.url === "string" && this.deps.isBlocked(args.url, this.blocklistFor(m.sessionId))) {
       this.send({
         t: "res",

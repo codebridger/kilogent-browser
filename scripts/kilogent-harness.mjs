@@ -55,6 +55,11 @@ const ok = (cond, m) => (cond ? pass(m) : fail(m));
 
 // ── mock chrome.* (the same shape mock-profiles-harness.mjs uses) ──────────────────────────────
 let nextTabId = 100;
+/** Where the next click lands the tab. Null = a click does not navigate. */
+let clickLandsOn = null;
+/** Tabs the transport armed interception on, and how it answered each paused request. */
+const armedTabs = new Set();
+const fetchAnswers = [];
 let nextGroupId = 500;
 const tabs = new Map();
 function makeTab(url) {
@@ -92,6 +97,23 @@ globalThis.chrome = {
       if (method === "Page.navigate") {
         const t = tabs.get(target.tabId);
         if (t && params?.url) t.url = params.url;
+        return cb?.({});
+      }
+      // A CLICK THAT NAVIGATES — the bug itself, in the fake. `RESOLVE_BOX_FN` is what `click()`
+      // evaluates to locate the element, so answering it also MOVES the tab, exactly as following a
+      // real link does. Without this the fake tab never moves, and every click assertion below
+      // would pass against a guard that does nothing.
+      if (method === "Runtime.evaluate" && params.expression.includes("__rbm") && clickLandsOn) {
+        const t = tabs.get(target.tabId);
+        if (t) t.url = clickLandsOn;
+        return cb?.({ result: { value: { found: true, x: 1, y: 1 } } });
+      }
+      if (method === "Fetch.enable") {
+        armedTabs.add(target.tabId);
+        return cb?.({});
+      }
+      if (method === "Fetch.continueRequest" || method === "Fetch.failRequest") {
+        fetchAnswers.push({ method, requestId: params?.requestId });
         return cb?.({});
       }
       if (method === "Runtime.evaluate") {
@@ -189,7 +211,14 @@ async function main() {
     },
     {
       WebSocketCtor: WsWebSocket,
-      makeExecutor: (pushStatus, label) => new Executor(pushStatus, label),
+      // The SAME policy `providers/kilogent/index.js` wires in production. Without it this harness
+      // would drive an executor with no guard and every assertion below about clicks would be
+      // testing an object the product does not ship.
+      makeExecutor: (pushStatus, label) =>
+        new Executor(pushStatus, label, {
+          allowUrl: (url, ctx) => conn.allowUrl(url, ctx),
+          onAttached: (chromeTabId) => conn.armTab(chromeTabId),
+        }),
       mintTicket,
       ownBlocklist: () => ownBlocklist,
       effectiveBlocklist,
@@ -275,6 +304,83 @@ async function main() {
   ok(
     !JSON.stringify(lookalike.body ?? {}).includes("blocked"),
     "a LOOK-ALIKE host is not the blocked origin — matching is anchored, not a prefix",
+  );
+
+  // ── the gap: a click, which names no URL ──────────────────────────────────────────────────────
+  //
+  // Every assertion above dispatches `browser_navigate` with a literal `url`, which the argument
+  // check in connection.js has always caught. The bug was everything else: an agent opens an
+  // allowed page, clicks a link, and lands wherever the link goes. A comment claimed "`Executor`'s
+  // own post-navigation assertion catches the rest", and there was no such assertion.
+  clickLandsOn = "https://bank.test/statement";
+  const blockedByClick = await dispatch(port, {
+    name: "browser_click",
+    args: { ref: "e1", element: "a link" },
+    sessionId: "job2",
+    timeoutMs: 5000,
+  });
+  ok(
+    JSON.stringify(blockedByClick.body ?? {}).includes("blocked"),
+    "a CLICK that lands on a blocked origin is refused — the gap this closes",
+  );
+  ok(
+    !JSON.stringify(blockedByClick.body ?? {}).includes("SNAPSHOT[https://bank.test"),
+    "and the refusal carries no snapshot of the page it landed on",
+  );
+
+  clickLandsOn = "https://ok.test/elsewhere";
+  const allowedClick = await dispatch(port, {
+    name: "browser_click",
+    args: { ref: "e1", element: "a link" },
+    sessionId: "job2",
+    timeoutMs: 5000,
+  });
+  ok(
+    !JSON.stringify(allowedClick.body ?? {}).includes("blocked"),
+    "a click that stays on an allowed origin is not disturbed",
+  );
+  clickLandsOn = null;
+
+  // ── prevention, not merely refusal ────────────────────────────────────────────────────────────
+  ok(armedTabs.size > 0, "interception was armed on the session's tabs");
+
+  // The tab must be one of JOB2's — that is the session whose blocklist has bank.test on it.
+  // `[...armedTabs][0]` picked whichever tab was armed first, which belongs to another session and
+  // has an empty list, so the "blocked" assertion passed or failed on tab ordering rather than on
+  // the guard.
+  const armed = [...conn.executor.tabIndex.entries()].find(([, v]) => v.sessionId === "job2")?.[0];
+  ok(typeof armed === "number", "job2 has an armed tab to intercept on");
+  fetchAnswers.length = 0;
+  await conn.onDebuggerEvent({ tabId: armed }, "Fetch.requestPaused", {
+    requestId: "req-blocked",
+    request: { url: "https://bank.test/anything" },
+  });
+  ok(
+    fetchAnswers.some((a) => a.method === "Fetch.failRequest" && a.requestId === "req-blocked"),
+    "a paused request to a blocked origin is FAILED before it leaves the browser",
+  );
+
+  fetchAnswers.length = 0;
+  await conn.onDebuggerEvent({ tabId: armed }, "Fetch.requestPaused", {
+    requestId: "req-ok",
+    request: { url: "https://ok.test/page" },
+  });
+  ok(
+    fetchAnswers.some((a) => a.method === "Fetch.continueRequest" && a.requestId === "req-ok"),
+    "and an allowed one continues",
+  );
+
+  // THE EVICTION CASE. MV3 drops this worker whenever it likes and the tab index goes with it. A
+  // request paused on a tab the transport no longer recognises must be REFUSED: allowing it is the
+  // hole, and ignoring it hangs the tab until Chrome gives up on the navigation.
+  fetchAnswers.length = 0;
+  await conn.onDebuggerEvent({ tabId: 999999 }, "Fetch.requestPaused", {
+    requestId: "req-amnesia",
+    request: { url: "https://ok.test/page" },
+  });
+  ok(
+    fetchAnswers.some((a) => a.method === "Fetch.failRequest" && a.requestId === "req-amnesia"),
+    "an unrecognised tab FAILS the request — unknown state never means allow, and never hangs",
   );
 
   // ── 4. an expired ticket is retried, not backed off ─────────────────────────────────────────

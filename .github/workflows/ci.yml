@@ -58,6 +58,7 @@ jobs:
           npm run test:snapshot
           npm run test:select
           npm run test:registry
+          npm run test:guard
           npm run test:popup
 
       - name: Bridge server type-checks

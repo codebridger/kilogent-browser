@@ -28,6 +28,9 @@
  * @property {() => void} [reconnectAll]
  * @property {(source:any, reason:any) => void} [onDetach]      Ignore tabs that are not yours.
  * @property {(tabId:number) => void} [onTabRemoved]            Ignore tabs that are not yours.
+ * @property {(source:any, method:string, params:any) => void} [onDebuggerEvent]
+ *           A raw CDP event. Ignore tabs that are not yours. MUST NOT take the tab lock — see
+ *           `onDebuggerEvent` below.
  * @property {() => object} [status]              Shallow-merged into the popup's snapshot.
  * @property {(msg:any) => any} [onMessage]       Return undefined to pass; anything else claims it.
  * @property {() => void} [teardown]
@@ -88,6 +91,26 @@ export class TransportRegistry {
 
   onTabRemoved(tabId) {
     this.#each("onTabRemoved", (t) => t.onTabRemoved(tabId));
+  }
+
+  /**
+   * A raw CDP event, broadcast like a detach.
+   *
+   * The extension had no consumer for `chrome.debugger.onEvent` at all — every use of CDP was
+   * request/response — so a transport that needs to answer the browser rather than ask it had
+   * nowhere to listen. Interception is the case: a request the page is about to make pauses and
+   * waits for a verdict, which arrives as an event and not as a reply.
+   *
+   * BROADCAST, not routed, for `onDetach`'s reason: each transport already knows which tabs are
+   * its own and the registry knows least of all. `source.tabId` is on every event.
+   *
+   * ⚠️ A HANDLER MUST NOT TAKE THE TAB LOCK, and this is the sharp edge. A paused request holds the
+   * page's load, and `withTabLock` is held by whatever command triggered the navigation — a handler
+   * that waits for that lock waits for a load that is waiting for the handler. Answer from state
+   * already in memory, or refuse.
+   */
+  onDebuggerEvent(source, method, params) {
+    this.#each("onDebuggerEvent", (t) => t.onDebuggerEvent(source, method, params));
   }
 
   /**
