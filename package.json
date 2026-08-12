@@ -25,7 +25,7 @@
     "build:relay": "npm run build -w packages/relay",
     "test:relay": "npm run typecheck -w packages/relay && npm run test:unit -w packages/relay",
     "test:version": "node scripts/resolve-versions.mjs --self-test",
-    "test": "npm run test:workflows && npm run test:lockfile && npm run test:ci-parity && npm run test:extension && npm run test:branding && npm run test:version && npm run test:notes && npm run test:snapshot && npm run test:select && npm run test:registry && npm run test:kilogent && npm run test:popup && npm run test:relay && npm run test:bridge && npm run test:mock && npm run test:profiles && npm run test:tarball",
+    "test": "npm run test:workflows && npm run test:lockfile && npm run test:ci-parity && npm run test:extension && npm run test:branding && npm run test:version && npm run test:notes && npm run test:snapshot && npm run test:select && npm run test:registry && npm run test:guard && npm run test:kilogent && npm run test:popup && npm run test:relay && npm run test:bridge && npm run test:mock && npm run test:profiles && npm run test:tarball",
     "test:lockfile": "node scripts/check-lockfile.mjs",
     "versions": "node scripts/resolve-versions.mjs --preview",
     "test:notes": "node scripts/release-notes.mjs --self-test",
@@ -35,7 +35,8 @@
     "test:ci-parity": "node scripts/check-ci-parity.mjs",
     "test:workflows": "node scripts/check-workflows.mjs",
     "test:kilogent": "npm run build:relay && node scripts/kilogent-harness.mjs",
-    "test:branding": "node scripts/check-branding.mjs"
+    "test:branding": "node scripts/check-branding.mjs",
+    "test:guard": "node scripts/guard-test.mjs"
   },
   "devDependencies": {
     "happy-dom": "^20.11.2",

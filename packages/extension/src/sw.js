@@ -44,6 +44,11 @@ chrome.runtime.onStartup.addListener(() => void registry.reconcile());
 chrome.runtime.onInstalled.addListener(() => void registry.reconcile());
 chrome.debugger.onDetach.addListener((source, reason) => registry.onDetach(source, reason));
 chrome.tabs.onRemoved.addListener((tabId) => registry.onTabRemoved(tabId));
+// Registered at the TOP LEVEL like the rest, which is what lets a CDP event wake an evicted worker
+// rather than arriving at nobody.
+chrome.debugger.onEvent.addListener((source, method, params) =>
+  registry.onDebuggerEvent(source, method, params)
+);
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   // TWO MESSAGES BELONG TO EVERY TRANSPORT AT ONCE, and are answered here rather than offered to
