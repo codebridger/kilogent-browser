@@ -202,8 +202,17 @@ nothing changed anywhere, no release is cut.
 and cuts **no** GitHub Release — a pre-release is for whoever asked for it by name.
 
 ```bash
+npm test              # everything CI gates on — one command, same result
 npm run versions      # what the next release would be, and why
 ```
+
+**One workflow run per merge.** CI runs on pull requests and gates the merge; Release runs on a push
+to `main` and decides what ships. They used to both run on main, running the same suite twice
+against the same commit.
+
+`npm test` runs exactly what CI gates on, and `npm run test:ci-parity` proves it by reading both
+files — so a step added to `ci.yml` and not to `npm test` fails immediately, rather than the next
+time somebody trusts a green laptop.
 
 The workflow is **four jobs, not four files**, and that is deliberate. A release has to list where
 *all* packages stand, so something must see every outcome at once — across separate workflow files

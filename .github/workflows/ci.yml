@@ -1,12 +1,16 @@
 name: CI
 
-# Every push and every PR. Two things ship from this repo — the extension (loaded unpacked or
-# zipped for the Web Store) and the relay (published to npm) — so both are checked here, and the
-# release workflow does not re-run any of it.
+# PULL REQUESTS ONLY. A merge to `main` used to run this AND `release.yml`, and both ran the whole
+# suite against the same commit — two runs, one of them pure duplication.
+#
+# `release.yml`'s first job runs `npm test`, so main and dev are still fully checked; this exists to
+# gate the merge. The split is: CI answers "may this land", Release answers "what ships".
+#
+# EVERY STEP IS AN npm SCRIPT, never inline shell. `npm test` runs exactly what this runs, so a
+# laptop cannot be green while CI is red — the property that broke once already, when a drifted lock
+# file left every local lane passing while `npm ci` refused to start.
 
 on:
-  push:
-    branches: [main, dev]
   pull_request:
   workflow_dispatch:
 
@@ -22,43 +26,23 @@ jobs:
     name: Extension
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
 
-      # THE EXTENSION HAS NO BUILD STEP, on purpose: the directory you read is the directory Chrome
-      # loads, which is most of why somebody can audit what they are about to give control of their
-      # browser to. So "build" here means prove it is loadable and packageable.
-      - name: Manifest is valid JSON and names files that exist
-        run: |
-          set -euo pipefail
-          node -e '
-            const fs = require("fs"), path = require("path");
-            const dir = "packages/extension";
-            const m = JSON.parse(fs.readFileSync(path.join(dir, "manifest.json"), "utf8"));
-            const missing = [];
-            const check = (p) => { if (p && !fs.existsSync(path.join(dir, p))) missing.push(p); };
-            check(m.action?.default_popup);
-            check(m.background?.service_worker);
-            for (const icon of Object.values(m.icons ?? {})) check(icon);
-            for (const cs of m.content_scripts ?? []) for (const js of cs.js ?? []) check(js);
-            if (missing.length) { console.error("manifest names files that do not exist:", missing); process.exit(1); }
-            if (m.manifest_version !== 3) { console.error("not MV3"); process.exit(1); }
-            console.log(`${m.name} ${m.version} — manifest ok, MV3, ${m.permissions.length} permissions`);
-          '
+      - name: The lock file agrees with the workspaces
+        # `npm ci` above already refuses a drifted lock — this runs anyway so the failure NAMES the
+        # workspace instead of printing npm's usage text.
+        run: npm run test:lockfile
 
-      - name: Every module the extension ships parses
-        # `node --check` on each file. It cannot prove Chrome will load them, but a syntax error in
-        # a service worker is otherwise invisible until the extension is installed and silently
-        # does nothing.
-        run: |
-          set -euo pipefail
-          find packages/extension -name '*.js' -not -path '*/node_modules/*' -print0 \
-            | xargs -0 -n1 node --check
-          echo "all extension modules parse"
+      - name: `npm test` still runs everything this file gates on
+        run: npm run test:ci-parity
+
+      - name: Manifest and modules
+        run: npm run test:extension
 
       - name: Tests
         run: |
@@ -68,7 +52,7 @@ jobs:
           npm run test:popup
 
       - name: Bridge server type-checks
-        run: npm run typecheck --workspace=packages/bridge-server
+        run: npm run test:bridge
 
       - name: Harnesses (bridge round-trip, multi-profile)
         run: |
@@ -76,73 +60,52 @@ jobs:
           npm run test:profiles
 
       - name: Package the extension
-        # A loadable zip on every commit: what you hand somebody to sideload, and what a Web Store
-        # upload takes. Version in the name so two artifacts are never confused.
+        # A loadable zip on every PR: what you hand somebody to sideload, and what a Web Store
+        # upload takes. The Release attaches its own; this one is for reviewing a change.
+        id: zip
         run: |
           set -euo pipefail
           V=$(node -p "require('./packages/extension/manifest.json').version")
-          (cd packages/extension && zip -qr "$RUNNER_TEMP/extension-$V.zip" . -x '*/node_modules/*' '*.DS_Store')
+          zip -qr "$RUNNER_TEMP/extension-$V.zip" packages/extension -x '*/node_modules/*' '*.DS_Store'
+          echo "version=$V" >> "$GITHUB_OUTPUT"
           ls -lh "$RUNNER_TEMP/extension-$V.zip"
-          echo "zip=$RUNNER_TEMP/extension-$V.zip" >> "$GITHUB_ENV"
-          echo "name=extension-$V" >> "$GITHUB_ENV"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
-          name: ${{ env.name }}
-          path: ${{ env.zip }}
+          name: extension-${{ steps.zip.outputs.version }}
+          path: ${{ runner.temp }}/extension-${{ steps.zip.outputs.version }}.zip
           if-no-files-found: error
 
   relay:
     name: Relay
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+        with:
+          # FULL HISTORY. Without it the resolver cannot reach the boundary commit and the preview
+          # below fails on every run — a permanent red annotation on a passing build, which is how
+          # people learn to ignore annotations.
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
 
-      - name: The lock file agrees with the workspaces
-        # `npm ci` above already refuses a drifted lock — this runs anyway so the failure NAMES the
-        # workspace instead of printing npm's usage text, and so the same check exists in `npm test`
-        # for a laptop, where `npm ci` is not what anybody runs.
-        run: npm run test:lockfile
+      - name: Type-check and unit tests
+        run: npm run test:relay
 
-      - name: Type-check (source and tests)
-        run: npm run typecheck -w packages/relay
-
-      - name: Unit tests
-        run: npm run test:unit -w packages/relay
-
-      - name: Build
-        run: npm run build -w packages/relay
-
-      - name: The release notes render, and the resolver's arithmetic
-        # Both are pure. The notes renderer is here because it used to be inline JS in the release
-        # workflow, where the only possible check was reading it — and a syntax error got through.
-        run: node scripts/release-notes.mjs --self-test
-
-      - name: The version resolver's own arithmetic
-        # Pure logic, no git and no network. The release path's version maths should not be first
-        # exercised in production.
-        run: node scripts/resolve-versions.mjs --self-test
-
-      - name: What the next release would be
-        # Informational, and the reason it never fails the build: on a PR from a fork, or before the
-        # first publish from this repo, the boundary commit is legitimately unresolvable.
-        continue-on-error: true
-        run: node scripts/resolve-versions.mjs --preview
+      - name: Pure logic — version arithmetic and release notes
+        # The release path's maths and its rendering should not be first exercised in production.
+        run: |
+          npm run test:version
+          npm run test:notes
 
       - name: The published tarball actually runs
-        # The one thing no unit test covers: that the ARTIFACT works. The tests run `dist/` by path,
-        # so they stay green through a broken `bin` mapping or a file missing from `files`.
-        run: |
-          set -euo pipefail
-          TARBALL=$(cd packages/relay && npm pack --silent --pack-destination "$RUNNER_TEMP")
-          mkdir -p "$RUNNER_TEMP/smoke" && cd "$RUNNER_TEMP/smoke"
-          npm init -y >/dev/null
-          npm i --no-audit --no-fund "$RUNNER_TEMP/$TARBALL"
-          OUT=$(./node_modules/.bin/remote-browser-relay --version)
-          echo "remote-browser-relay --version -> $OUT"
-          test -n "$OUT"
+        run: npm run test:tarball
+
+      - name: What the next release would be
+        # Informational. `continue-on-error` because a PR from a FORK cannot read npm's gitHead for
+        # a private-ish boundary, and that is not this PR's fault.
+        continue-on-error: true
+        run: npm run versions

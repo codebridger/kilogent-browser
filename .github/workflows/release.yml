@@ -44,12 +44,12 @@ jobs:
       relay_release: ${{ steps.v.outputs.relay_release }}
       relay_version: ${{ steps.v.outputs.relay_version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # FULL HISTORY AND TAGS. The resolver walks `git log <boundary>..HEAD` and reads
           # `git describe --tags`; a shallow clone resolves neither and it fails closed every run.
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -84,13 +84,13 @@ jobs:
       published: ${{ steps.pub.outputs.published }}
       version: ${{ steps.pub.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # NO `registry-url`. setup-node unconditionally writes an authToken line into an .npmrc, and
       # with no token in the environment it expands to an EMPTY token. npm then believes auth is
       # configured, never starts the OIDC exchange, and dies with `E404 ... you do not have
       # permission` — which reads exactly like a missing trusted publisher and is not.
       # (actions/setup-node#1551.)
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -145,8 +145,8 @@ jobs:
     outputs:
       version: ${{ steps.zip.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
       - name: Stamp the manifest
@@ -171,7 +171,7 @@ jobs:
           (cd packages/extension && zip -qr "$RUNNER_TEMP/extension-$V.zip" . -x '*/node_modules/*' '*.DS_Store')
           echo "version=$V" >> "$GITHUB_OUTPUT"
           ls -lh "$RUNNER_TEMP/extension-$V.zip"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: extension-${{ steps.zip.outputs.version }}
           path: ${{ runner.temp }}/extension-${{ steps.zip.outputs.version }}.zip
@@ -192,10 +192,10 @@ jobs:
     permissions:
       contents: write # create the release, push the extension tag
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v6
         with:
           name: extension-${{ needs.extension.outputs.version }}
           path: ${{ runner.temp }}/dist
