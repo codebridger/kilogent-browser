@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * Assert this fork's user-visible identity survived the last merge from upstream.
+ * Assert this fork's own wiring survived the last merge from upstream — its identity, and the
+ * lines that connect it to core.
  *
  * WHY THIS EXISTS, precisely. Merging upstream means resolving conflicts in files that are MOSTLY
  * upstream's and PARTLY ours — `popup.html` above all, where the structure is theirs and only a few
@@ -69,6 +70,30 @@ const MUST_CONTAIN = [
     'packages/extension/src/providers/panels.js',
     'the Kilogent panel registration (not merely the import)',
     'createKilogentPanel',
+    { imports: false },
+  ],
+
+  // THE POLICY WIRING, and it is here for a reason worth reading. `kilogent-harness.mjs` runs the
+  // real connection against a real relay — but it builds its OWN executor with its OWN
+  // `makeExecutor`, so it proves the CONNECTION enforces the blocklist and proves nothing about
+  // whether `providers/kilogent/index.js` ever hands the policy to core. Deleting either line below
+  // left every harness assertion green. A mutation test caught that; these two rows are the fix.
+  [
+    'packages/extension/src/providers/kilogent/index.js',
+    'the navigation policy is handed to the Executor',
+    'allowUrl:',
+    { imports: false },
+  ],
+  [
+    'packages/extension/src/providers/kilogent/index.js',
+    'request interception is armed on attach',
+    'onAttached:',
+    { imports: false },
+  ],
+  [
+    'packages/extension/src/providers/kilogent/index.js',
+    'CDP events reach the connection (interception answers them)',
+    'onDebuggerEvent',
     { imports: false },
   ],
 
