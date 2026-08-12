@@ -38,8 +38,12 @@ jobs:
         # workspace instead of printing npm's usage text.
         run: npm run test:lockfile
 
-      - name: `npm test` still runs everything this file gates on
-        run: npm run test:ci-parity
+      - name: The workflow files load, and npm test still equals CI
+        # `test:workflows` first: a workflow Actions cannot parse produces a run with ZERO
+        # jobs and no logs, which reads like nothing happened rather than like an error.
+        run: |
+          npm run test:workflows
+          npm run test:ci-parity
 
       - name: Manifest and modules
         run: npm run test:extension
