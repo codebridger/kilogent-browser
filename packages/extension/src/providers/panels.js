@@ -14,9 +14,14 @@ import { createKilogentPanel } from "./kilogent/popup.js";
 /**
  * Factories, in display order. Each returns a Panel:
  *
- *   name    string, for logs
- *   mount   (root: HTMLElement) => void   fill your own section; wire your own listeners
- *   render  (snapshot: object) => void    called on mount and then on every poll
+ *   name     string, for logs
+ *   mount    (root: HTMLElement) => void   fill your own section; wire your own listeners
+ *   render   (snapshot: object) => void    called on mount and then on every poll
+ *   summary  string, OPTIONAL — present means "fold me into a <details> with this label"
+ *
+ * Each factory receives `{storage, send, openTab}` — Chrome's storage, a message sender that never
+ * throws, and a way to open a tab. Everything a panel needs from the browser arrives that way, so a
+ * panel is loadable outside one and `scripts/popup-test.mjs` needs no Chrome shim.
  *
  * A panel owns ITS OWN MARKUP. `popup.html` is core and a fork must not edit it — which is only
  * possible because nothing in it is panel-specific.
@@ -25,8 +30,7 @@ import { createKilogentPanel } from "./kilogent/popup.js";
  */
 export const PANELS = [
   createKilogentPanel,
-  // The self-hosted bridge is the ordinary path upstream and the ADVANCED one here, so it is folded
-  // away. Expressed by wrapping the factory rather than by editing the panel — a fork demoting a
-  // core panel must not have to fork it.
+  // Folded away behind a <details>: this build's users connect to Kilogent, and the
+  // self-hosted bridge is the escape hatch rather than the offer.
   (deps) => ({ ...createBridgePanel(deps), summary: "Advanced — self-hosted bridge" }),
 ];

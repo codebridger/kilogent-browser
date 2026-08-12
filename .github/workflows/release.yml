@@ -1,0 +1,261 @@
+name: Release
+
+# ONE RELEASE PER MERGE TO MAIN, covering every package — as FOUR JOBS, one per concern.
+#
+#   resolve     what version each package would get, path-filtered independently
+#   relay       publish to npm, only if packages/relay changed
+#   extension   stamp the manifest and build the zip, always
+#   publish     cut the ONE GitHub Release, from both outcomes
+#
+# WHY NOT A FILE PER PACKAGE, which is the obvious alternative: the release has to list where ALL
+# packages stand, so something has to see every outcome at once. Across separate workflow files
+# that means `workflow_run` chaining — which reintroduces "which commit is this actually about",
+# and is where release pipelines quietly ship the wrong thing. Jobs give the same separation with
+# `needs` doing the coordination, and one place that cuts the release.
+#
+# A FAILURE IS SCOPED TO ITS PACKAGE. A relay publish that fails does not stop the extension being
+# built and released; the release simply says the relay did not ship. That is the property separate
+# files were wanted for, and `if: always()` on the last job is what provides it.
+#
+# WHICH PACKAGES THIS REPO RELEASES is the repository VARIABLE `RELEASE_PACKAGES` (a comma-separated
+# list of resolver keys; unset means all of them). It exists so a branded FORK can inherit this file
+# byte for byte — a fork must not publish the relay to npm under a name it does not own, and making
+# that an edit here would mean conflicting on this file at every merge from upstream. Configuration,
+# not code; the same rule the extension's provider seam follows.
+#
+#   gh variable set RELEASE_PACKAGES --body 'extension' --repo <owner>/<fork>
+#
+# A repo can also declare it in package.json as `"releasePackages": ["extension"]`, which is what a
+# fork should prefer: a variable is invisible in a checkout and survives neither a transfer nor a
+# fork-of-a-fork. The variable OVERRIDES the declaration, so a one-off run still needs no commit.
+#
+# An excluded package is still resolved and still listed in the release — a fork's notes should say
+# which relay its extension expects — it simply never publishes.
+#
+# ⚠️ npm MATCHES A TRUSTED PUBLISHER ON THE WORKFLOW FILENAME as well as the org and repo. This
+# file is `release.yml`; renaming it breaks publishing until npmjs.com is updated to match.
+
+on:
+  push:
+    branches: [main, dev]
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # ── what would each package become? ────────────────────────────────────────────────────────
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      any: ${{ steps.v.outputs.any }}
+      resolved: ${{ steps.v.outputs.resolved }}
+      ext_release: ${{ steps.v.outputs.ext_release }}
+      ext_version: ${{ steps.v.outputs.ext_version }}
+      relay_release: ${{ steps.v.outputs.relay_release }}
+      relay_version: ${{ steps.v.outputs.relay_version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # FULL HISTORY AND TAGS. The resolver walks `git log <boundary>..HEAD` and reads
+          # `git describe --tags`; a shallow clone resolves neither and it fails closed every run.
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Verify
+        run: npm test
+      - name: Resolve
+        id: v
+        env:
+          # Unset in this repository, so everything releases. A fork narrows it. An unknown key is
+          # refused rather than ignored, so a typo fails the run instead of quietly releasing
+          # nothing.
+          RELEASE_PACKAGES: ${{ vars.RELEASE_PACKAGES }}
+        run: |
+          set -euo pipefail
+          node scripts/resolve-versions.mjs --preview
+          RESOLVED=$(node scripts/resolve-versions.mjs)
+          pick() { node -p "JSON.parse(process.argv[1]).packages.find(p=>p.key==='$1').$2" "$RESOLVED"; }
+          {
+            echo "resolved<<JSON"; echo "$RESOLVED"; echo "JSON"
+            echo "any=$(node -p 'JSON.parse(process.argv[1]).any' "$RESOLVED")"
+            echo "ext_release=$(pick extension release)"
+            echo "ext_version=$(pick extension version)"
+            echo "relay_release=$(pick relay release)"
+            echo "relay_version=$(pick relay version)"
+          } >> "$GITHUB_OUTPUT"
+
+  # ── the relay: npm ─────────────────────────────────────────────────────────────────────────
+  relay:
+    needs: resolve
+    if: needs.resolve.outputs.relay_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # npm trusted publishing (OIDC)
+    outputs:
+      published: ${{ steps.pub.outputs.published }}
+      version: ${{ steps.pub.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      # NO `registry-url`. setup-node unconditionally writes an authToken line into an .npmrc, and
+      # with no token in the environment it expands to an EMPTY token. npm then believes auth is
+      # configured, never starts the OIDC exchange, and dies with `E404 ... you do not have
+      # permission` — which reads exactly like a missing trusted publisher and is not.
+      # (actions/setup-node#1551.)
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      # ⚠️ npm@latest is npm 12, requiring node ^22.22.2. `.nvmrc` must stay at or above that, or
+      # this fails with EBADENGINE before anything publishes — exactly how the first attempt died.
+      - name: Upgrade npm for trusted publishing
+        run: npm i -g npm@latest
+      - name: Assert no npm auth is configured
+        # OIDC engages only when npm finds NO credentials. Without this, a bad registration and a
+        # stray empty token produce the identical error.
+        run: |
+          if [ -n "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::error::NODE_AUTH_TOKEN is set. npm will use it instead of OIDC."; exit 1
+          fi
+          TOKEN_CFG=$(npm config get //registry.npmjs.org/:_authToken 2>/dev/null || echo undefined)
+          case "$TOKEN_CFG" in
+            undefined|null|'') echo "npm $(npm -v) — no token configured, OIDC is free to engage." ;;
+            *) echo "::error::An npm authToken is configured. It shadows OIDC."; exit 1 ;;
+          esac
+      - run: npm ci
+      - name: Publish
+        id: pub
+        env:
+          BASE: ${{ needs.resolve.outputs.relay_version }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_NAME}" = "main" ]; then
+            VERSION="$BASE"; TAG="latest"
+          else
+            # Monotonic and never resets, so two dev builds of one base cannot collide. And
+            # `0.3.0-dev.7` sorts BELOW `0.3.0`, which is right — the base is what it works towards.
+            VERSION="${BASE}-dev.${GITHUB_RUN_NUMBER}"; TAG="dev"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          PUBLISHED=$(npm view remote-browser-relay versions --json 2>/dev/null || echo '[]')
+          if node -e 'let l=[];try{l=JSON.parse(process.argv[2])}catch{};if(!Array.isArray(l))l=[l];process.exit(l.includes(process.argv[1])?0:1)' "$VERSION" "$PUBLISHED"; then
+            echo "::notice::remote-browser-relay@$VERSION already published — skipping."
+            echo "published=skipped" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # Stamp BEFORE the build: version.ts reads package.json at runtime and the daemon reports
+          # it, so stamping after would ship a build disagreeing with the registry.
+          npm pkg set version="$VERSION" -w packages/relay
+          npm run build -w packages/relay
+          npm publish -w packages/relay --tag "$TAG" --access public
+          echo "published=yes" >> "$GITHUB_OUTPUT"
+
+  # ── the extension: a zip, always ───────────────────────────────────────────────────────────
+  extension:
+    needs: resolve
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.zip.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+      - name: Stamp the manifest
+        if: needs.resolve.outputs.ext_release == 'true' && github.ref_name == 'main'
+        # The manifest version is what Chrome shows and what the Web Store orders by. Never
+        # committed back — the checkout is throwaway, and the tag is what records it.
+        run: |
+          node -e '
+            const fs = require("fs"), p = "packages/extension/manifest.json";
+            const m = JSON.parse(fs.readFileSync(p, "utf8"));
+            m.version = process.argv[1];
+            fs.writeFileSync(p, JSON.stringify(m, null, 2) + "\n");
+            console.log("manifest stamped to " + m.version);
+          ' "${{ needs.resolve.outputs.ext_version }}"
+      - name: Package
+        id: zip
+        # ALWAYS, even when the extension did not change — the latest release must always be a
+        # place somebody can download a working extension from.
+        run: |
+          set -euo pipefail
+          V=$(node -p "require('./packages/extension/manifest.json').version")
+          (cd packages/extension && zip -qr "$RUNNER_TEMP/extension-$V.zip" . -x '*/node_modules/*' '*.DS_Store')
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          ls -lh "$RUNNER_TEMP/extension-$V.zip"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: extension-${{ steps.zip.outputs.version }}
+          path: ${{ runner.temp }}/extension-${{ steps.zip.outputs.version }}.zip
+          if-no-files-found: error
+
+  # ── one release, from both outcomes ────────────────────────────────────────────────────────
+  publish:
+    needs: [resolve, relay, extension]
+    # `always()` so a relay that failed, or was skipped for having nothing to publish, still gets a
+    # release for whatever DID change. `needs.extension.result` is checked explicitly because
+    # without a zip there is nothing to attach and the release would be worse than none.
+    if: >-
+      always()
+      && github.ref_name == 'main'
+      && needs.resolve.outputs.any == 'true'
+      && needs.extension.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release, push the extension tag
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v6
+        with:
+          name: extension-${{ needs.extension.outputs.version }}
+          path: ${{ runner.temp }}/dist
+      - name: Cut the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESOLVED: ${{ needs.resolve.outputs.resolved }}
+          RELAY_RESULT: ${{ needs.relay.result }}
+          RELAY_PUBLISHED: ${{ needs.relay.outputs.published }}
+          EXT: ${{ needs.extension.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Date plus run number: monotonic, sortable, and it cannot collide — which a package
+          # version cannot promise here, since two packages version independently and either may
+          # be unchanged.
+          TAG="v$(date -u +%Y.%m.%d).${GITHUB_RUN_NUMBER}"
+          RELAY_V="${{ needs.resolve.outputs.relay_version }}"
+          # The body is rendered by a SCRIPT IN THE REPO, not by `node -e` here. It was inline and
+          # shipped a syntax error — a template literal needing a literal backtick — which killed
+          # this job AFTER the relay had published, leaving npm with a version GitHub had no release
+          # for. A file is the same bytes locally and in CI, and `scripts/release-notes.mjs` has a
+          # self-test; inline JS in YAML can only ever be eyeballed.
+          node scripts/release-notes.mjs > "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md"
+
+          gh release create "$TAG" \
+            --title "Extension $EXT · Relay $RELAY_V" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            --target "$GITHUB_SHA" \
+            "$RUNNER_TEMP/dist/extension-$EXT.zip#Chrome extension (unpacked, v$EXT)"
+          echo "::notice::Released $TAG"
+      - name: Tag the extension
+        # AFTER the release succeeded, never before: this tag IS the extension's boundary for the
+        # next run, so writing it early would make a failed release look shipped and skip those
+        # commits forever. The relay needs no tag — npm's own gitHead is its boundary, and that
+        # cannot drift from what was actually published.
+        if: needs.resolve.outputs.ext_release == 'true'
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f "extension-v${{ needs.extension.outputs.version }}" "$GITHUB_SHA"
+          git push -f origin "extension-v${{ needs.extension.outputs.version }}"

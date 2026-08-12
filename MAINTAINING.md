@@ -68,6 +68,10 @@ optional extra.
 | `src/providers/index.js`, `src/providers/panels.js` | **rarely** | we add one import and one entry to each; conflicts only if upstream edits those same lines |
 | `popup.html` | **rarely** | the BODY is upstream's structure; only the heading and the stylesheet are ours |
 | `scripts/popup-test.mjs` | **rarely** | upstream's file with OUR panel's tests appended at the end |
+| `scripts/resolve-versions.mjs`, `scripts/release-notes.mjs`, `.github/workflows/release.yml` | **never** | byte-identical to upstream — what this repo releases is *declared*, not coded (§2) |
+| `.github/workflows/ci.yml` | **rarely** | upstream's file plus ONE extra step, the Kilogent harness |
+| `package.json` | **always, trivially** | `name` and `releasePackages` are ours, every script is upstream's |
+| `packages/relay/**` | **never** | upstream's, unedited — we build and test it, we do not publish it (§2) |
 
 `sw.js` AND `popup.js` used to conflict on every single merge, because the transport and the
 sign-in UI were written INTO them. Neither does now: upstream grew a seam on both sides, ours moved
@@ -113,7 +117,43 @@ Sending core fixes upstream is not politeness. A fix kept here is a fix we re-me
 
 ---
 
-## 2. Making your own brand
+## 2. Releasing — and the one thing this fork must never do
+
+Every merge to `main` cuts **one GitHub Release** carrying the extension zip, through the same
+`release.yml` upstream uses. **That workflow can publish `remote-browser-relay` to npm, and this
+repository must never do it.** It does not own the name; its extension talks to the relay published
+from upstream.
+
+The fix is not an edit to the workflow — that would make `release.yml` a permanent merge conflict,
+on the one file whose whole job is to be inherited unchanged. Instead **what a repository releases
+is configuration**:
+
+```json
+{ "name": "kilogent-browser", "releasePackages": ["extension"] }
+```
+
+That line in `package.json` is the whole mechanism. `RELEASE_PACKAGES` in the environment overrides
+it for a one-off run; upstream sets neither and therefore releases both. An unknown name is refused
+rather than ignored, because "release nothing" and a typo look identical otherwise.
+
+The relay still appears in the release notes, as `from upstream`, with **the version npm actually
+serves** — not the one in `packages/relay/package.json`, which is only a seed the publish step
+stamps and never commits back. That row is how a reader learns which relay this extension expects.
+
+**`packages/relay/` stays in the tree, unedited.** Deleting it would mean re-deleting it at every
+merge, and keeping it is what lets `npm run test:kilogent` run the real relay against the real
+transport — the only test that makes the two ends of the wire format agree.
+
+Two smaller notes:
+
+- **npm would refuse us anyway.** Trusted publishing binds to org + repo + workflow *filename*, so
+  `codebridger/kilogent-browser` cannot publish `remote-browser-relay` even if it tried. That is a
+  backstop, not the design — a failed publish every merge is still a red pipeline and a release that
+  says `⚠️ did not publish`.
+- **The extension's version comes from `extension-v*` git tags**, written by the release job only
+  after the release succeeds. Never move them by hand.
+
+## 3. Making your own brand
 
 Fork upstream, not this repository — unless you specifically want Kilogent's auth as a starting
 point. What follows is the full inventory of what a rebrand touches.
@@ -128,7 +168,7 @@ point. What follows is the full inventory of what a rebrand touches.
 | 3b | `providers/<yourbrand>/popup.js` | every visible string in your panel |
 | 4 | `providers/<yourbrand>/config.js` → `KEYS` | the `chrome.storage` keys |
 | 5 | `providers/<yourbrand>/config.js` → `DEFAULT_FUNCTIONS_BASE` | **your own endpoint** — this one is not cosmetic |
-| 6 | `package.json` | `name` |
+| 6 | `package.json` | `name`, and `releasePackages` — see §2 before you touch it |
 | 7 | `scripts/<yourbrand>-harness.mjs` | the harness and its npm script |
 
 A case-preserving find-and-replace covers 1–4, 6 and 7. Number 5 is a real decision, not a rename.
