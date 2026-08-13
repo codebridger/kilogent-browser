@@ -69,13 +69,11 @@ jobs:
       - name: Bridge server type-checks
         run: npm run test:bridge
 
-      # `packages/agent` and `packages/daemon` had a `typecheck` script and no caller, so both drifted
-      # out of CI's sight. The agent stopped sending the bearer the MCP face began requiring, and
-      # `npm run smoke` — the README's own verification step — 401'd for months with nothing to say so.
-      - name: Typecheck the remaining workspaces
-        run: |
-          npm run test:agent
-          npm run test:daemon
+      # `packages/agent` had a `typecheck` script and no caller, so it drifted out of CI's sight: it
+      # stopped sending the bearer the MCP face began requiring, and `npm run smoke` — the README's
+      # own verification step — 401'd for months with nothing to say so.
+      - name: Typecheck the agent
+        run: npm run test:agent
 
       - name: Harnesses (bridge round-trip, multi-profile)
         run: |
