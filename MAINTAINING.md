@@ -180,8 +180,11 @@ A case-preserving find-and-replace covers 1–4, 6 and 7. Number 5 is a real dec
 somebody else's server knows. Renaming it points the extension at a project that does not exist, and
 the symptom is every sign-in failing with a network error that names nothing.
 
-**Do not rename an npm scope either.** `@lumi.ai/relay` stays as it is. `@lumi.ai` is an org on the
-public registry; the brand on your box does not change who publishes the software you install.
+**Do not rename an npm scope either.** A package name is an address on the public registry, not
+branding — the brand on your box does not change who publishes the software you install. The relay
+publishes as `remote-browser-relay` from upstream and this fork does not publish it at all
+(`releasePackages` in package.json says `extension`, and that is what makes the rule enforceable
+rather than a promise).
 
 **Renaming the storage keys signs everybody out.** The extension looks for `kilogent.session` and an
 already-installed copy has `oldbrand.session`. It finds nothing, so it signs out once and the person

@@ -16,6 +16,8 @@ Upstream is **[navidshad/remote-browser-mcp](https://github.com/navidshad/remote
 the open project: the extension core, the relay, and the MCP server. This repository is the
 **Kilogent-branded build** of it.
 
+See [BRIDGE-SETUP.md](BRIDGE-SETUP.md) to put the agent on a different machine. [PRD.md](PRD.md) is kept as a historical record of the original design and no longer describes this code.
+
 Everything Kilogent-specific lives in **one directory**, `packages/extension/src/providers/kilogent/`:
 
 | File | What it does |
@@ -86,7 +88,7 @@ There are two halves that meet over an authenticated WebSocket:
 
 ```
    ┌──────────────────────── CLOUD VM ────────────────────────┐        ┌───────────── YOUR MACHINE ─────────────┐
-   │  AI Agent  ──MCP──▶  bridge-server                        │        │  MV3 extension  (Aso Dara profile)     │
+   │  AI Agent  ──MCP──▶  bridge-server                        │        │  MV3 extension  (agent profile)        │
    │  (Claude Code /       ├─ MCP face  localhost:3000/mcp     │        │    │                                    │
    │   packages/agent)     └─ WS  face  localhost:3002 ◀───────┼── wss ─┼────┘  dials OUT, token-authenticated   │
    │                          published by cloudflared         │        │    chrome.debugger / CDP  ──▶  a tab   │
@@ -110,10 +112,10 @@ Browser tool names **mirror the official [Playwright MCP](https://github.com/mic
 
 | Path | What it is |
 |---|---|
-| [`packages/bridge-server`](packages/bridge-server) | VM-side bridge. MCP browser tools ⇄ WebSocket to the extension, with token auth, `/health`, and per-session tab tracking. Exposes `browser_*`, `check_local_status`, and `bridge_ping`. **This is the self-host path**, and the only server in this repo — if you are running this for yourself, this is the one you want. (Kilogent's own hosted relay, which the same extension talks to in Kilogent mode, is a different program and lives in Kilogent's private repo; nothing here depends on it.) |
+| [`packages/bridge-server`](packages/bridge-server) | VM-side bridge. MCP browser tools ⇄ WebSocket to the extension, with token auth, `/health`, and per-session tab tracking. Exposes `browser_*`, `check_local_status`, and `bridge_ping`. **This is the self-host path**, and the only server in this repo — if you are running this for yourself, this is the one you want. A hosted service that wants its own transport adds one under `packages/extension/src/providers/`; see "Adding your own transport" below. Kilogent mode does not use it — that path goes to the relay below. |
 | [`packages/extension`](packages/extension) | The MV3 Chrome extension. Popup for Agent URL + token, a service worker holding one outbound WS per profile (heartbeat + `chrome.alarms` keepalive + reconnect backoff), and a `chrome.debugger` executor. |
-| [`packages/agent`](packages/agent) | A standalone terminal agent — a stand-in for the VM's real client. Connects to the bridge and runs a tool-use loop. LLM is pluggable ([`src/llm`](packages/agent/src/llm)) — **Gemini** by default, Anthropic optional — with a no-API-key `smoke` test. |
-| [`packages/daemon`](packages/daemon) | Legacy local MCP sidecar (presence + session notifications) from the pre-bridge architecture. Kept for reference; superseded by the bridge. |
+| [`packages/relay`](packages/relay) | **Side 2 of the hosted path.** One process holding one WebSocket per connected browser, so a product can address a Chrome on somebody's laptop. Presence and dispatch only — it is not an authorization boundary, and who a browser is comes from a pluggable auth provider (`ticket` or `token`). Published to npm as `remote-browser-relay`; `npm i -g remote-browser-relay` for the release, `@dev` for the pre-release. |
+| [`packages/agent`](packages/agent) | A standalone terminal agent — a stand-in for the VM's real client. Connects to the bridge and runs a tool-use loop. LLM is pluggable ([`src/llm`](packages/agent/src/llm)) — **Gemini** by default, Anthropic optional — with a no-API-key `smoke` test (`npm run smoke --workspace=packages/agent`, against a running bridge). |
 
 ## Browser tools
 
@@ -125,60 +127,146 @@ All exposed on the one bridge MCP endpoint, mirroring Playwright MCP names:
 
 ## Prerequisites
 
-- **Node.js 22+**
+- **Node.js 22+** (`.nvmrc` pins 22.22.3)
 - **Google Chrome**
-- **cloudflared** on the VM (`brew install cloudflared` / apt) — publishes the WebSocket face
-- A shared token: `openssl rand -hex 32` — the same value goes on the VM and in the extension popup
+- *(only if the agent runs on a different machine)* **cloudflared** or any other way to publish one
+  WebSocket port — see [BRIDGE-SETUP.md](BRIDGE-SETUP.md). Not needed to try this.
 - *(only for the standalone `packages/agent`)* a **Gemini API key** (`GEMINI_API_KEY`), or set `LLM_PROVIDER=anthropic` + `ANTHROPIC_API_KEY`
 
 ## Quick start
 
-Three steps: run the bridge on the VM, load the extension in Chrome, verify. About ten minutes end to end.
+**Start on one machine.** The agent and the browser can be on the same box, and everything below
+works with no VM, no tunnel and no DNS. Put it on a VM once you have watched it drive your Chrome —
+that is [BRIDGE-SETUP.md](BRIDGE-SETUP.md), and it changes one URL.
 
 ```bash
+git clone https://github.com/navidshad/remote-browser-mcp
+cd remote-browser-mcp
 npm install
 npm run build
 ```
 
-### 1 · VM — run the bridge
+### 1 · Run the bridge
+
+Two tokens, and they must differ — the bridge refuses to start otherwise. They authenticate two
+different parties: the extension to the WebSocket face, the agent to the MCP face.
 
 ```bash
-BRIDGE_ACCESS_TOKEN=<token> BRIDGE_MCP_TOKEN=<mcp-token> MCP_PORT=3000 WS_PORT=3002 \
-  node packages/bridge-server/dist/index.js
-# or under pm2:
-BRIDGE_ACCESS_TOKEN=<token> BRIDGE_MCP_TOKEN=<mcp-token> pm2 start packages/bridge-server/dist/index.js --name rbm-bridge
+export BRIDGE_ACCESS_TOKEN=$(openssl rand -hex 32)
+export BRIDGE_MCP_TOKEN=$(openssl rand -hex 32)
+node packages/bridge-server/dist/index.js
+# MCP face → http://127.0.0.1:3000/mcp   (loopback)
+# WS  face → ws://0.0.0.0:3002           (the extension dials in here)
 ```
 
-Publish the WS face with `cloudflared` and point the VM's agent at the MCP face
-(`http://localhost:3000/mcp`). Full ingress config and DNS notes are in
-[BRIDGE-SETUP.md](BRIDGE-SETUP.md).
+### 2 · Load the extension, in one dedicated profile
 
-### 2 · Machine — load the extension (one dedicated profile)
-
-1. Create a **dedicated Chrome profile** for the agent (e.g. "Aso Dara"), ideally an account-less local profile so Chrome sync can't copy the extension into or out of it.
+1. Create a **dedicated Chrome profile** for the agent, ideally an account-less local profile so Chrome sync can't copy the extension into or out of it.
 2. `chrome://extensions` → **Developer mode** → **Load unpacked** → select [`packages/extension/`](packages/extension). Install it in **only** this profile, and turn **off** Extensions sync — that isolation is what keeps the agent off your other profiles.
-3. Open the popup and set **Agent URL** (`wss://…/rbm-ws`) + **Access Token** (the token from step 1) → **Save & Connect**. Status should read *Connected to agent*.
+3. Open the popup → **+ Add profile**. **Agent URL** is `ws://localhost:3002` on one machine (`wss://…` once it is behind a tunnel); **Access Token** is your `BRIDGE_ACCESS_TOKEN`. Press **Save**. The status line should read *Connected*.
 4. Keep a window of that profile open whenever the agent may browse — **background is fine, focus is not required**. The first command attaches `chrome.debugger` and shows Chrome's "…started debugging this browser" bar; leave it in place.
 
-### 3 · Verify end-to-end
+### 3 · Point an agent at it
 
 ```bash
-# on the VM
+claude mcp add --transport http browser http://127.0.0.1:3000/mcp \
+  --header "Authorization: Bearer $BRIDGE_MCP_TOKEN"
+claude mcp list      # browser → ✓ Connected
+```
+
+Then ask it to open a page. You should watch it happen in your own window.
+
+### Verify
+
+Two useful checks, and they answer different questions.
+
+```bash
+npm run test:mock    # the whole path — real bridge, real Executor, real MCP clients, mocked Chrome
+```
+
+That needs nothing running and no tokens: it spawns its own bridge and proves the server half works
+on this machine. If it passes and your popup still will not connect, the problem is the extension,
+the profile or the token — not the build.
+
+```bash
 curl -s localhost:3000/health          # → {"status":"ok",…} — liveness, no credential needed
 curl -s localhost:3000/status -H "Authorization: Bearer $BRIDGE_MCP_TOKEN"   # → "extensionConnected":true
 BRIDGE_MCP_TOKEN=$BRIDGE_MCP_TOKEN node packages/bridge-server/dist/test-client.js   # bridge_ping → "pong"
 ```
+
+Those ask the bridge you are actually running whether your Chrome has arrived.
 
 `/health` is deliberately thin. It used to report whether a browser was attached, how many tabs it
 held and which sessions were live — a description of a specific person's Chrome, served to anyone
 who could reach the port. That moved to `/status`, behind the token; `/health` stays anonymous
 because a tunnel health check has no credential.
 
-Or drive the whole path with the standalone agent's no-API-key check:
+## Releases
+
+**One release per merge to `main`, covering every package.** A release here is a snapshot of the
+repo: it always states where *all* packages stand, so you can tell which extension goes with which
+relay. The extension zip is attached every time, even when the change was elsewhere — the latest
+release must always be somewhere you can download a working extension from.
+
+What is skipped is the *publishing*, not the release: `scripts/resolve-versions.mjs` path-filters
+each package independently, so a relay-only change does not republish an identical extension. If
+nothing changed anywhere, no release is cut.
+
+| Package | Where it goes | How to get it |
+|---|---|---|
+| Chrome extension | attached to the GitHub Release | download, unzip, load unpacked |
+| `remote-browser-relay` | npm | `npm i -g remote-browser-relay` |
+
+`dev` publishes the relay as a prerelease on npm's `dev` tag (`npm i -g remote-browser-relay@dev`)
+and cuts **no** GitHub Release — a pre-release is for whoever asked for it by name.
 
 ```bash
-npm run smoke --workspace=packages/agent
+npm test              # everything CI gates on — one command, same result
+npm run versions      # what the next release would be, and why
 ```
+
+**One workflow run per merge.** CI runs on pull requests and gates the merge; Release runs on a push
+to `main` and decides what ships. They used to both run on main, running the same suite twice
+against the same commit.
+
+`npm test` runs exactly what CI gates on, and `npm run test:ci-parity` proves it by reading both
+files — so a step added to `ci.yml` and not to `npm test` fails immediately, rather than the next
+time somebody trusts a green laptop.
+
+The workflow is **four jobs, not four files**, and that is deliberate. A release has to list where
+*all* packages stand, so something must see every outcome at once — across separate workflow files
+that means `workflow_run` chaining, which reintroduces "which commit is this about" and is where
+release pipelines quietly ship the wrong thing. Jobs give the same separation with `needs` doing
+the coordination:
+
+```
+resolve  ──┬──▶ relay      (npm, only if packages/relay changed)
+           ├──▶ extension  (stamp + zip, always)
+           └──────────────▶ publish  (one GitHub Release, from both outcomes)
+```
+
+**A failure is scoped to its package.** A relay publish that fails does not stop the extension
+being built and released — the release says so instead, in the table. Anything other than an
+outright success is reported as not published, because a release naming a version npm does not
+have is worse than a red build.
+
+### Versions are derived, never typed
+
+From conventional-commit subjects: `feat` is a minor, a `!` or a `BREAKING CHANGE:` footer is a
+major, everything else is a patch. Two rules are load-bearing:
+
+- **The path filter decides *whether* to release; the type only decides *how big*.** Any commit
+  touching a package's own paths releases it. An unrecognised type — `chore`, `ci`, `refactor`, an
+  unparseable subject — falls through to a PATCH rather than to "no release". The conventional way
+  round, where only `feat`/`fix` release, means a `refactor(relay):` that changes the shipped bundle
+  publishes nothing and reports success.
+- **While the major is 0, a breaking change bumps the MINOR** rather than jumping to 1.0.0.
+  Reaching 1.0.0 should be somebody's decision.
+
+**Two packages, two boundaries**, and the difference is not an inconsistency. The relay's is npm's
+own `gitHead` for the published version — it cannot drift from what was actually published, which a
+tag can. The extension is published to no registry, so an `extension-v*` git tag *is* its record,
+pushed only after the release succeeded.
 
 ## Development
 

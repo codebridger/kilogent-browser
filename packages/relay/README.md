@@ -13,11 +13,6 @@ is decided by a pluggable **auth provider** in [`src/providers/`](src/providers)
 `ticket` (short-lived HMAC credentials minted by whatever owns your accounts) and `token` (static
 secrets, for trying it out). Adding a third is a directory and one line.
 
-⚠️ **It was published as `@lumi.ai/relay` until 2026-08-11.** A box installed before then keeps
-working with nothing done by hand: the CLI reads the old `~/.lumi-relay/` when the new directory is
-absent, still honours `LUMI_RELAY_HOME`, and `service install` moves the directory and removes the
-old unit — once. See [`src/paths.ts`](src/paths.ts).
-
 ## It is not the whole story
 
 The browser end is the **MV3 extension** in [`../extension`](../extension), and the agent end is
@@ -73,11 +68,6 @@ shared with whatever mints credentials, and rotating it refuses every connected 
 `unauthorized` — which the extension correctly treats as *stop and tell the human*, not as
 something to retry. Rotation is `setup --rotate`, spelled out loud. `config show-keys` prints them
 again later.
-
-(For Lumi's own box, those two go into Secret Manager as `CREW_BROWSER_RELAY_KEY` and
-`CREW_BROWSER_TICKET_KEY`, and both must exist BEFORE the Crew functions deploy — `workspaceMcp`
-binds them, so a missing one fails the whole deploy and the Ship loses every tool, not just the
-browser ones.)
 
 `doctor` has three verdicts and they mean different things: **fail** is broken now, **warn** is
 working now and will break later (no lingering, no fd ceiling), **skip** is not applicable here.

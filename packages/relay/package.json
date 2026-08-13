@@ -3,7 +3,7 @@
   "version": "0.2.0",
   "type": "module",
   "description": "Browser relay \u2014 holds one WebSocket per connected browser so agents can drive it. Pluggable auth; presence and dispatch only.",
-  "//public": "PUBLIC PACKAGE, PUBLIC SOURCE, and the name matches the repo. It was @lumi.ai/relay while it was one product's infrastructure; it is side 2 of an open suite now, and a scope nobody else can publish under was the wrong shape for that.",
+  "//public": "PUBLIC PACKAGE, PUBLIC SOURCE, and the name matches the repo. An unscoped name is deliberate: this is side 2 of an open suite, and a scope nobody else can publish under was the wrong shape for that.",
   "bin": {
     "remote-browser-relay": "dist/cli/index.js"
   },
@@ -47,7 +47,7 @@
     "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
     "//build": "CLEAN FIRST. `tsc` never deletes, so a file removed from src/ lingers in dist/ forever on a working copy \u2014 and `check-browser-ticket-parity.mjs` imports dist/ by path. Moving ticket.ts under providers/ left a stale dist/ticket.js that the guard would have kept verifying, green, against code no longer in the repo. CI never sees it (fresh checkout); a laptop always does."
   },
-  "//deps": "Everything here must resolve from the PUBLIC registry, since `npm i -g` installs it on a machine with no access to this repo. The relay deliberately depends on no @lumi/* package: it is presence and dispatch, it holds no Crew types, and keeping it standalone is what lets it be built and published without the rest of the monorepo.",
+  "//deps": "Everything here must resolve from the PUBLIC registry, since `npm i -g` installs it on a machine with no access to this repo. The relay deliberately depends on nothing from the rest of this monorepo: it is presence and dispatch, it holds no caller's types, and staying standalone is what lets it be built and published on its own.",
   "dependencies": {
     "commander": "^15.0.0",
     "picocolors": "^1.1.1",
