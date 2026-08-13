@@ -15,20 +15,16 @@
  * A doc rule would not have held — the whole point is that nobody re-reads a runbook asking "is this
  * still mine to publish". So it is a test.
  *
- * WHAT IT DOES NOT BAN. The `@lumi.ai/relay` rename history is deliberate and load-bearing: this
- * package was published under that name until 2026-08-11, and a machine that installed it then still
- * reads `~/.lumi-relay/`. Deleting those references would strand real installs. They are allow-listed
- * by exact string, not by pattern, so a NEW private reference cannot hide behind them.
+ * ALLOWED is empty on purpose. It once held the `@lumi.ai/relay` rename strings, because installed
+ * boxes still read the old config directory — that compatibility path is gone now, and so is the
+ * exemption. Anything added back here needs a reason written beside it, because an allow-list is
+ * where a real leak hides.
  */
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
 /** Substrings that are fine wherever they appear. Exact, so nothing hides behind a loose pattern. */
-const ALLOWED = [
-  '@lumi.ai/relay', // the previous npm name — install-critical history
-  '.lumi-relay', //    the legacy config directory the CLI still reads
-  'LUMI_RELAY_HOME', // the legacy env var, still honoured
-];
+const ALLOWED = [];
 
 /**
  * Things that belong to whoever runs this, not to whoever reads it.
@@ -39,6 +35,7 @@ const ALLOWED = [
 const FORBIDDEN = [
   [/\bsubturtle\b/i, 'a private product hostname'],
   [/\bkilogent\b/i, 'a private product name'],
+  [/\blumi\b/i, 'a private product name'],
   [/aso[\s-]?dara/i, "a private Chrome profile name"],
   [/\baso-agent\b/i, 'a private hostname'],
   [/\bceo-tunnel\b/i, 'a private pm2 process name'],

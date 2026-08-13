@@ -1,6 +1,6 @@
 // `update` — a deliberately short ladder, and the shortness is the decision.
 //
-// The Crew runner's self-update (Lumi PRD §15.37) is ten rungs, an `updating` flag distinct from
+// A sibling daemon's self-update is ten rungs, an `updating` flag distinct from
 // `shuttingDown`, an attempt counter, and a mirror of its phase into Firestore. It has to be: it
 // runs on hundreds of laptops nobody can reach, so "a fix arrives only when a human notices" is a
 // real failure mode with a real cost.
@@ -29,10 +29,8 @@ import { cliPath, serviceStatus, SERVICE_LABEL, LINUX_UNIT } from "../service.js
 import { RELAY_NAME, RELAY_VERSION } from "../version.js";
 
 /**
- * What `npm i -g` installs. It was `@lumi.ai/relay`, and the shape changed with the name: an
- * UNSCOPED package is one path segment under `node_modules`, a scoped one is two. Everything below
- * derives its marker from this constant rather than spelling the path out, so that difference is
- * handled by `path.sep`-joining the name instead of by remembering it.
+ * What `npm i -g` installs. Everything below derives its marker from this constant rather than
+ * spelling the path out, so `node_modules` layout is handled by `path.sep`-joining the name.
  */
 export const PACKAGE_NAME = "remote-browser-relay";
 

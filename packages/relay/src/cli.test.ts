@@ -1,7 +1,7 @@
 // The CLI's decisions, not its printing: env-file round-tripping, setup's idempotence, the unit
 // files and their inverses, and every rung of the update ladder.
 //
-// `LUMI_RELAY_HOME` points at a scratch directory for the whole file, so nothing here can touch a
+// `REMOTE_BROWSER_RELAY_HOME` points at a scratch directory for the whole file, so nothing here can touch a
 // real machine's configuration.
 
 import { describe, it, beforeAll, afterAll } from "vitest";
@@ -11,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 
 const HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-test-"));
-process.env.LUMI_RELAY_HOME = HOME;
+process.env.REMOTE_BROWSER_RELAY_HOME = HOME;
 
 const { parseEnvFile, serializeEnvFile, readEnvFile, writeEnvFile, envFile, loadEnvFileIntoProcess } =
   await import("./paths.js");
@@ -173,7 +173,7 @@ describe("the launchd plist", () => {
 describe("the update ladder", () => {
   // Built from PACKAGE_NAME rather than spelled out, so the fixture cannot disagree with the
   // marker the code matches on. It disagreed once: the package went from scoped to unscoped, which
-  // is one path segment fewer, and a hard-coded `@lumi.ai/relay` fixture kept asserting the old
+  // is one path segment fewer, and a hard-coded scoped-name fixture kept asserting the old
   // shape while the code looked for the new one.
   const globalCli = path.join(
     "/usr/local/lib/node_modules",
