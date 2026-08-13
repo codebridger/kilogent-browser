@@ -1,6 +1,21 @@
 # PRD — Remote Browser MCP
 
-**Status:** Draft v2 (reframed: assemble, don't build)
+> ## ⚠️ HISTORICAL — this describes a design that was not built
+>
+> Kept because the reasoning is still useful, not because it is accurate. It plans to *assemble*
+> the product out of the official Playwright MCP attached to your Chrome over CDP, with the tunnel
+> on your own machine. None of that is what exists:
+>
+> | This document says | The code does |
+> |---|---|
+> | Playwright MCP over `--remote-debugging-port` | a purpose-built MV3 extension; Chrome 136+ blocks that flag for the default profile |
+> | a tunnel on your laptop, exposing a local port | the extension dials **out**; nothing listens on your machine |
+> | a thin presence daemon | `packages/bridge-server`, which serves the MCP tools itself |
+>
+> For how it actually works, read the README. For how to deploy it, read
+> [BRIDGE-SETUP.md](BRIDGE-SETUP.md).
+
+**Status:** Superseded. Draft v2 (reframed: assemble, don't build)
 **Owner:** Navid
 **Last updated:** June 10, 2026
 

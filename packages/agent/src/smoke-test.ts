@@ -5,8 +5,9 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { mcpAuth } from "./auth.js";
 
-const DAEMON_URL = process.env.DAEMON_URL ?? "http://localhost:3001/mcp";
+const DAEMON_URL = process.env.DAEMON_URL ?? "http://localhost:3000/mcp";
 const PLAYWRIGHT_URL = process.env.PLAYWRIGHT_URL ?? "http://localhost:3000";
 const TEST_URL = process.env.TEST_URL ?? "https://example.com";
 
@@ -25,11 +26,11 @@ async function connectPlaywright(): Promise<Client> {
   const base = PLAYWRIGHT_URL.replace(/\/$/, "");
   const client = new Client({ name: "smoke-test", version: "0.1.0" });
   try {
-    await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`)));
+    await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), mcpAuth()));
     return client;
   } catch {
     const fb = new Client({ name: "smoke-test", version: "0.1.0" });
-    await fb.connect(new SSEClientTransport(new URL(`${base}/sse`)));
+    await fb.connect(new SSEClientTransport(new URL(`${base}/sse`), mcpAuth()));
     return fb;
   }
 }
@@ -40,7 +41,7 @@ async function main() {
   // 1. Daemon
   console.log("Daemon:");
   const daemon = new Client({ name: "smoke-test", version: "0.1.0" });
-  await daemon.connect(new StreamableHTTPClientTransport(new URL(DAEMON_URL)));
+  await daemon.connect(new StreamableHTTPClientTransport(new URL(DAEMON_URL), mcpAuth()));
   pass(`connected to ${DAEMON_URL}`);
 
   const dTools = await daemon.listTools();

@@ -10,7 +10,7 @@ Cloud browsers get blocked, fingerprinted, and logged out. Your own Chrome is al
 
 Perfect for: personal automation agents (LinkedIn outreach, dashboards behind SSO, admin panels), research agents that need sites in your logged-in state, and any workflow where a headless datacenter browser just gets captcha-walled.
 
-See [PRD.md](PRD.md) for the product rationale and [BRIDGE-SETUP.md](BRIDGE-SETUP.md) for the full deployment runbook.
+See [BRIDGE-SETUP.md](BRIDGE-SETUP.md) to put the agent on a different machine. [PRD.md](PRD.md) is kept as a historical record of the original design and no longer describes this code.
 
 ## Features
 
@@ -60,7 +60,7 @@ Browser tool names **mirror the official [Playwright MCP](https://github.com/mic
 
 | Path | What it is |
 |---|---|
-| [`packages/bridge-server`](packages/bridge-server) | VM-side bridge. MCP browser tools ⇄ WebSocket to the extension, with token auth, `/health`, and per-session tab tracking. Exposes `browser_*`, `check_local_status`, and `bridge_ping`. **This is the self-host path**, and the only server in this repo — if you are running this for yourself, this is the one you want. A hosted service that wants its own transport adds one under `packages/extension/src/providers/`; see "Adding your own transport" above. |
+| [`packages/bridge-server`](packages/bridge-server) | VM-side bridge. MCP browser tools ⇄ WebSocket to the extension, with token auth, `/health`, and per-session tab tracking. Exposes `browser_*`, `check_local_status`, and `bridge_ping`. **This is the self-host path**, and the only server in this repo — if you are running this for yourself, this is the one you want. A hosted service that wants its own transport adds one under `packages/extension/src/providers/`; see "Adding your own transport" below. |
 | [`packages/extension`](packages/extension) | The MV3 Chrome extension. Popup for Agent URL + token, a service worker holding one outbound WS per profile (heartbeat + `chrome.alarms` keepalive + reconnect backoff), and a `chrome.debugger` executor. |
 | [`packages/relay`](packages/relay) | **Side 2 of the hosted path.** One process holding one WebSocket per connected browser, so a product can address a Chrome on somebody's laptop. Presence and dispatch only — it is not an authorization boundary, and who a browser is comes from a pluggable auth provider (`ticket` or `token`). Published to npm as `remote-browser-relay`; `npm i -g remote-browser-relay` for the release, `@dev` for the pre-release. |
 | [`packages/agent`](packages/agent) | A standalone terminal agent — a stand-in for the VM's real client. Connects to the bridge and runs a tool-use loop. LLM is pluggable ([`src/llm`](packages/agent/src/llm)) — **Gemini** by default, Anthropic optional — with a no-API-key `smoke` test. |
@@ -127,60 +127,79 @@ Two arguments keep a big page from costing a whole snapshot: `find` returns only
 
 ## Prerequisites
 
-- **Node.js 22+**
+- **Node.js 22+** (`.nvmrc` pins 22.22.3)
 - **Google Chrome**
-- **cloudflared** on the VM (`brew install cloudflared` / apt) — publishes the WebSocket face
-- A shared token: `openssl rand -hex 32` — the same value goes on the VM and in the extension popup
+- *(only if the agent runs on a different machine)* **cloudflared** or any other way to publish one
+  WebSocket port — see [BRIDGE-SETUP.md](BRIDGE-SETUP.md). Not needed to try this.
 - *(only for the standalone `packages/agent`)* a **Gemini API key** (`GEMINI_API_KEY`), or set `LLM_PROVIDER=anthropic` + `ANTHROPIC_API_KEY`
 
 ## Quick start
 
-Three steps: run the bridge on the VM, load the extension in Chrome, verify. About ten minutes end to end.
+**Start on one machine.** The agent and the browser can be on the same box, and everything below
+works with no VM, no tunnel and no DNS. Put it on a VM once you have watched it drive your Chrome —
+that is [BRIDGE-SETUP.md](BRIDGE-SETUP.md), and it changes one URL.
 
 ```bash
+git clone https://github.com/navidshad/remote-browser-mcp
+cd remote-browser-mcp
 npm install
 npm run build
 ```
 
-### 1 · VM — run the bridge
+### 1 · Run the bridge
+
+Two tokens, and they must differ — the bridge refuses to start otherwise. They authenticate two
+different parties: the extension to the WebSocket face, the agent to the MCP face.
 
 ```bash
-BRIDGE_ACCESS_TOKEN=<token> BRIDGE_MCP_TOKEN=<mcp-token> MCP_PORT=3000 WS_PORT=3002 \
-  node packages/bridge-server/dist/index.js
-# or under pm2:
-BRIDGE_ACCESS_TOKEN=<token> BRIDGE_MCP_TOKEN=<mcp-token> pm2 start packages/bridge-server/dist/index.js --name rbm-bridge
+export BRIDGE_ACCESS_TOKEN=$(openssl rand -hex 32)
+export BRIDGE_MCP_TOKEN=$(openssl rand -hex 32)
+node packages/bridge-server/dist/index.js
+# MCP face → http://127.0.0.1:3000/mcp   (loopback)
+# WS  face → ws://0.0.0.0:3002           (the extension dials in here)
 ```
 
-Publish the WS face with `cloudflared` and point the VM's agent at the MCP face
-(`http://localhost:3000/mcp`). Full ingress config and DNS notes are in
-[BRIDGE-SETUP.md](BRIDGE-SETUP.md).
-
-### 2 · Machine — load the extension (one dedicated profile)
+### 2 · Load the extension, in one dedicated profile
 
 1. Create a **dedicated Chrome profile** for the agent, ideally an account-less local profile so Chrome sync can't copy the extension into or out of it.
 2. `chrome://extensions` → **Developer mode** → **Load unpacked** → select [`packages/extension/`](packages/extension). Install it in **only** this profile, and turn **off** Extensions sync — that isolation is what keeps the agent off your other profiles.
-3. Open the popup and set **Agent URL** (`wss://…/rbm-ws`) + **Access Token** (the token from step 1) → **Save & Connect**. Status should read *Connected to agent*.
+3. Open the popup → **+ Add profile**. **Agent URL** is `ws://localhost:3002` on one machine (`wss://…` once it is behind a tunnel); **Access Token** is your `BRIDGE_ACCESS_TOKEN`. Press **Save**. The status line should read *Connected*.
 4. Keep a window of that profile open whenever the agent may browse — **background is fine, focus is not required**. The first command attaches `chrome.debugger` and shows Chrome's "…started debugging this browser" bar; leave it in place.
 
-### 3 · Verify end-to-end
+### 3 · Point an agent at it
 
 ```bash
-# on the VM
+claude mcp add --transport http browser http://127.0.0.1:3000/mcp \
+  --header "Authorization: Bearer $BRIDGE_MCP_TOKEN"
+claude mcp list      # browser → ✓ Connected
+```
+
+Then ask it to open a page. You should watch it happen in your own window.
+
+### Verify
+
+Two useful checks, and they answer different questions.
+
+```bash
+npm run test:mock    # the whole path — real bridge, real Executor, real MCP clients, mocked Chrome
+```
+
+That needs nothing running and no tokens: it spawns its own bridge and proves the server half works
+on this machine. If it passes and your popup still will not connect, the problem is the extension,
+the profile or the token — not the build.
+
+```bash
 curl -s localhost:3000/health          # → {"status":"ok",…} — liveness, no credential needed
 curl -s localhost:3000/status -H "Authorization: Bearer $BRIDGE_MCP_TOKEN"   # → "extensionConnected":true
 BRIDGE_MCP_TOKEN=$BRIDGE_MCP_TOKEN node packages/bridge-server/dist/test-client.js   # bridge_ping → "pong"
 ```
 
+Those ask the bridge you are actually running whether your Chrome has arrived.
+
 `/health` is deliberately thin. It used to report whether a browser was attached, how many tabs it
 held and which sessions were live — a description of a specific person's Chrome, served to anyone
 who could reach the port. That moved to `/status`, behind the token; `/health` stays anonymous
 because a tunnel health check has no credential.
-
-Or drive the whole path with the standalone agent's no-API-key check:
-
-```bash
-npm run smoke --workspace=packages/agent
-```
 
 ## Releases
 

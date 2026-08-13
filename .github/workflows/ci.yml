@@ -53,6 +53,11 @@ jobs:
       - name: No private infrastructure
         run: npm run test:private
 
+      # The runbook once told you to start the bridge with a variable no code has ever read, so its
+      # first command exited 1 for everybody. Docs and config drift apart silently; this compares them.
+      - name: Docs and code agree about configuration
+        run: npm run test:env
+
       - name: Tests
         run: |
           npm run test:snapshot
@@ -63,6 +68,14 @@ jobs:
 
       - name: Bridge server type-checks
         run: npm run test:bridge
+
+      # `packages/agent` and `packages/daemon` had a `typecheck` script and no caller, so both drifted
+      # out of CI's sight. The agent stopped sending the bearer the MCP face began requiring, and
+      # `npm run smoke` — the README's own verification step — 401'd for months with nothing to say so.
+      - name: Typecheck the remaining workspaces
+        run: |
+          npm run test:agent
+          npm run test:daemon
 
       - name: Harnesses (bridge round-trip, multi-profile)
         run: |
