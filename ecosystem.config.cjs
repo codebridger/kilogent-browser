@@ -5,7 +5,7 @@
 //   rbm-chrome      dedicated debug Chrome on :9222 (persistent ~/.rbm-chrome-debug)
 //   rbm-playwright  Playwright MCP on :3000, attached to Chrome over CDP
 //   rbm-daemon      presence/notification daemon on :3001
-//   rbm-tunnel      named Cloudflare tunnel (browser*.subturtle.app -> :3000/:3001)
+//   rbm-tunnel      named Cloudflare tunnel (your hostnames -> :3000/:3001)
 //
 // Why pin PATH/interpreter: this machine's login shell sometimes resolves to an
 // old nvm Node 14, which crashes the daemon and breaks npx. Every app here runs
@@ -39,8 +39,11 @@ const TUNNEL_CONFIG = `${HOME}/.cloudflared/remote-browser.yml`;
 
 // Matches scripts/start-local.sh: pin the tunnel hostnames + localhost so the
 // Host-header check passes both through the tunnel and for on-machine smoke tests.
+// YOUR hostnames, not ours: set RBM_ALLOWED_HOSTS to the tunnel names you publish. Localhost is
+// always appended so on-machine smoke tests pass the Host-header check without configuration.
+const TUNNEL_HOSTS = process.env.RBM_ALLOWED_HOSTS ?? '';
 const ALLOWED_HOSTS =
-  'browser.subturtle.app,browser-daemon.subturtle.app,' +
+  (TUNNEL_HOSTS ? `${TUNNEL_HOSTS},` : '') +
   `localhost,localhost:${PLAYWRIGHT_PORT},127.0.0.1,127.0.0.1:${PLAYWRIGHT_PORT}`;
 
 const common = {

@@ -69,7 +69,7 @@ async function isChromeDebugAccessible(): Promise<boolean> {
 
 /** Extension mode: readiness = the Playwright MCP bridge server is listening.
  *  With PLAYWRIGHT_MCP_EXTENSION_TOKEN set it auto-attaches to the paired
- *  (Aso Dara) profile, so a running server means the browser is drivable —
+ *  profile, so a running server means the browser is drivable —
  *  provided that profile's Chrome window is open. */
 async function isExtensionBridgeReady(): Promise<boolean> {
   const port = Number(process.env.PLAYWRIGHT_PORT ?? "3000");
@@ -86,7 +86,7 @@ export async function checkChromeStatus(): Promise<ChromeStatus> {
       chrome_debug_accessible: false,
       message:
         BROWSER_MODE === "extension"
-          ? "Local machine is online but Chrome is not running. Open the dedicated agent Chrome profile (Aso Dara)."
+          ? "Local machine is online but Chrome is not running. Open the dedicated agent Chrome profile."
           : "Local machine is online but Chrome is not running. Please open Chrome.",
     };
   }
@@ -103,7 +103,7 @@ export async function checkChromeStatus(): Promise<ChromeStatus> {
       chrome_debug_accessible: false,
       message:
         BROWSER_MODE === "extension"
-          ? "Chrome is running but the Playwright MCP bridge is not reachable. Make sure host services are up (make start-local) and the Playwright MCP Bridge extension is connected in the Aso Dara profile."
+          ? "Chrome is running but the Playwright MCP bridge is not reachable. Make sure host services are up (make start-local) and the Playwright MCP Bridge extension is connected in the agent's Chrome profile."
           : "Chrome is running but remote debugging is not accessible. Launch the debug Chrome: make chrome-debug.",
     };
   }
@@ -114,7 +114,7 @@ export async function checkChromeStatus(): Promise<ChromeStatus> {
     chrome_debug_accessible: true,
     message:
       BROWSER_MODE === "extension"
-        ? "Local machine is online and the agent browser (Aso Dara) is ready for remote control."
+        ? "Local machine is online and the agent browser is ready for remote control."
         : "Local machine is online and Chrome is ready for remote control.",
   };
 }

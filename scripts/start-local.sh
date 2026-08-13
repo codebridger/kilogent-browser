@@ -115,7 +115,7 @@ log "  Playwright MCP PID: ${PLAYWRIGHT_PID}"
 # or the bridge extension isn't loaded and connections time out. Ensure one exists.
 # Disable with AUTO_OPEN_ASO=0.
 if [[ "$BROWSER_MODE" != "cdp" && "${AUTO_OPEN_ASO:-1}" == "1" && "$(uname)" == "Darwin" ]]; then
-  bash "$SCRIPT_DIR/open-aso-window.sh" || warn "Could not auto-open the agent Chrome window — open it yourself."
+  bash "$SCRIPT_DIR/open-agent-window.sh" || warn "Could not auto-open the agent Chrome window — open it yourself."
 fi
 
 # ── Start Daemon ──────────────────────────────────────────────────────────────
@@ -136,7 +136,6 @@ sleep 1
 if command -v cloudflared >/dev/null 2>&1; then
   if [[ -f "$TUNNEL_CONFIG" ]]; then
     # Named tunnel: stable hostnames, one process, two ingress rules.
-    # One-time setup + how to undo it: SETUP-LOG.md.
     log "Starting named Cloudflare tunnel (${TUNNEL_CONFIG})..."
     cloudflared tunnel --config "$TUNNEL_CONFIG" run &
     TUNNEL_PID=$!

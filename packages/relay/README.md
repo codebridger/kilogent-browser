@@ -74,11 +74,6 @@ shared with whatever mints credentials, and rotating it refuses every connected 
 something to retry. Rotation is `setup --rotate`, spelled out loud. `config show-keys` prints them
 again later.
 
-(For Lumi's own box, those two go into Secret Manager as `CREW_BROWSER_RELAY_KEY` and
-`CREW_BROWSER_TICKET_KEY`, and both must exist BEFORE the Crew functions deploy — `workspaceMcp`
-binds them, so a missing one fails the whole deploy and the Ship loses every tool, not just the
-browser ones.)
-
 `doctor` has three verdicts and they mean different things: **fail** is broken now, **warn** is
 working now and will break later (no lingering, no fd ceiling), **skip** is not applicable here.
 It exits non-zero only on `fail`, and it fails *open* on anything it could not read — a false

@@ -40,7 +40,7 @@ chrome-debug:
 # Ensure the agent's Chrome profile (ASO_PROFILE_NAME, resolved by name) has a
 # window open so the bridge extension is live. Extension mode; background is fine.
 aso-window:
-	bash scripts/open-aso-window.sh
+	bash scripts/open-agent-window.sh
 
 # ── Host services (M2: with tunnel) ───────────────────────────────────────────
 
