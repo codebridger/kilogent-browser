@@ -36,6 +36,14 @@ export const KEYS = {
   endpoint: "kilogent.endpoint",
   blocklist: "kilogent.blocklist",
   /**
+   * Per-session Ship blocklists, `{[sessionId]: origins[]}`.
+   *
+   * PERSISTED because the worker is not. A blocklist that lives only in memory is gone at the next
+   * MV3 eviction — and the relay does not re-send `session_open`, because ITS session is still open.
+   * The extension then had no list, treated that as "nothing is blocked", and allowed everything.
+   */
+  sessions: "kilogent.sessions",
+  /**
    * An in-flight device handshake: `{userCode, deviceCode, expiresAt, label, endpoint}`.
    *
    * IN STORAGE RATHER THAN IN MEMORY, and that is the whole reason sign-in works. The service

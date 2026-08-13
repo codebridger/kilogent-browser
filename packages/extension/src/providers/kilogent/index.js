@@ -297,6 +297,10 @@ export function createKilogentTransport(deps) {
           }
           return mintTicket(callFunction, id.endpoint, token, id.browserId);
         },
+        // Needed for the SESSION POLICY, which is persisted now: an in-memory blocklist is gone at
+        // the next worker eviction, and the relay does not re-send it because its session is still
+        // open. See `restoreSessions`.
+        storage,
         ownBlocklist: () => ownBlocklistCache,
         effectiveBlocklist,
         isBlocked,
