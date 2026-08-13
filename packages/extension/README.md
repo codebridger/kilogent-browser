@@ -73,10 +73,12 @@ npm run test:mock        # the bridge mode's CDP + session model
 npm run test:profiles    # multiple bridges, per-profile tab isolation
 ```
 
-`test:kilogent` runs the actual relay from the published `@lumi.ai/relay` package and makes this
-extension satisfy it. That matters because the two ends live in **different repositories** with
-nothing linking them at compile time — each side testing its own belief about the wire format is
-exactly the class of bug that ships broken.
+`test:kilogent` runs the actual relay from `packages/relay` in this repository and makes this
+extension satisfy it. It used to reach into the PUBLISHED package by path, and a release moved
+`ticket.js` and broke the import — in a repo whose CI was not watching the relay. The fix was not a
+tighter version pin; the relay lives here, so a moved file fails in this lane rather than three
+weeks later. Each side testing its own belief about the wire format is exactly the class of bug that
+ships broken.
 
 What those harnesses do **not** cover is the service worker's own lifecycle — eviction, the alarm,
 a session replaced in place. Those need a real Chrome.

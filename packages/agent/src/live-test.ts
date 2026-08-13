@@ -1,12 +1,11 @@
 #!/usr/bin/env node
 // Direct live test of the LLM provider tool-use loop (bypasses readline).
-// Wires daemon + Playwright MCP via the shared bridge, creates a session, and
+// Connects to the bridge, creates a session, and
 // runs one real task end-to-end. Prints the final answer.
 import { selectProvider } from "./llm/index.js";
 import { McpBridge } from "./mcp.js";
 
-const DAEMON_URL = process.env.DAEMON_URL ?? "http://localhost:3001/mcp";
-const PLAYWRIGHT_URL = process.env.PLAYWRIGHT_URL ?? "http://localhost:3000";
+const BRIDGE_MCP_URL = process.env.BRIDGE_MCP_URL ?? "http://localhost:3000/mcp";
 const TASK =
   process.env.TASK ??
   "Open a new tab, navigate to https://example.com, and tell me the exact page title.";
@@ -20,11 +19,10 @@ async function main() {
     process.exit(1);
   }
 
-  const bridge = new McpBridge(DAEMON_URL, PLAYWRIGHT_URL);
-  await bridge.connectDaemon();
-  await bridge.connectPlaywright();
+  const bridge = new McpBridge(BRIDGE_MCP_URL);
+  await bridge.connect();
   await bridge.listTools();
-  console.log("Connected to daemon + Playwright MCP.");
+  console.log("Connected to the bridge.");
 
   const session = provider.createSession({
     systemPrompt:

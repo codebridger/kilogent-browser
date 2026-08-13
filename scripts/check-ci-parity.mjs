@@ -27,7 +27,14 @@ function gatingScripts() {
   // Split on step boundaries so a `continue-on-error` can be attributed to its own step.
   for (const step of ci.split(/\n      - /)) {
     if (/continue-on-error:\s*true/.test(step)) continue;
-    for (const m of step.matchAll(/npm run ([a-z:]+)/g)) out.add(m[1]);
+    // COMMENTS ARE NOT STEPS. A comment explaining why a lane exists may legitimately name a
+    // script — one saying `npm run smoke` 401'd for months was read as a gate CI enforces, and
+    // demanded that `npm test` run a script CI never calls. Strip them before matching.
+    const code = step
+      .split('\n')
+      .filter((line) => !/^\s*#/.test(line))
+      .join('\n');
+    for (const m of code.matchAll(/npm run ([a-z:]+)/g)) out.add(m[1]);
   }
   return [...out].filter((s) => !NOT_A_GATE.has(s)).sort();
 }

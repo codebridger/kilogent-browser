@@ -1,173 +1,135 @@
-# Bridge Setup — extension ↔ VM agent (direct dial-out path)
+# Bridge setup — extension ↔ VM, over a tunnel
 
-> **DEPLOYED 2026-06-14** on `ubuntu@18.199.209.43`. Bridge runs under pm2 as
-> `rbm-bridge` (MCP `127.0.0.1:3000`, WS `:3002`); token lives in
-> `~/rbm-bridge.config.cjs`. WS is published by **reusing the existing tunnel**
-> via a path rule — extension **Agent URL = `wss://aso-agent.subturtle.app/rbm-ws`**.
-> The VM's `browser` + `browser-daemon` MCP servers are repointed to
-> `http://127.0.0.1:3000/mcp` (backup: `~/.claude.json.bak-pre-bridge-*`).
-> Remaining: load the extension in the Aso Dara profile and paste URL + token.
+The full deployment path: a bridge on a VM, published over a Cloudflare tunnel, with the extension
+dialling out to it from your own machine.
 
-The new architecture: a **bridge-server** on the VM exposes the browser tools as
-MCP (localhost) and accepts an authenticated WebSocket from a **custom MV3
-extension** running in the real **Aso Dara** Chrome profile on the Mac. The
-extension dials OUT to the VM (`wss://`), so nothing inbound is needed on the Mac
-— no Mac relay, no Mac tunnel, no Cloudflare Access in front of the browser path.
+**You do not need any of this to try the project.** The bridge listens on `0.0.0.0:3002`, so on one
+machine you can put `ws://localhost:3002` straight into the extension popup and skip every step
+below. Do that first — the tunnel is what you add once it already works, not a prerequisite for
+seeing it work.
 
-```
-VM:  packages/bridge-server  ──MCP localhost:3000/mcp──>  VM's Claude Code / packages/agent
-                             ──WS  localhost:3002──> cloudflared ──> wss://browser-ws.subturtle.app
-Mac: Aso Dara Chrome + MV3 extension ──dials out──> wss://browser-ws.subturtle.app  (token auth)
-                                     ──chrome.debugger──> the agent tab
-```
+Placeholders used throughout, all yours to fill in:
 
-`check_local_status` and all `browser_*` tools live on the **one** bridge MCP
-endpoint (mirrored Playwright MCP names → `CONTRACT.md` barely changes). The
-separate Mac-side `daemon` + Playwright MCP + Mac tunnel are **superseded**.
+| Placeholder | Meaning |
+|---|---|
+| `<vm-user>@<vm-host>` | wherever you run the bridge |
+| `<bridge-host>` | the public hostname you publish the WebSocket face on |
+| `<tunnel-name>` | your Cloudflare named tunnel |
 
----
+## 1. Pick two tokens
 
-## 1. Pick a shared token (once)
+Two, not one, and they must differ — the bridge refuses to start otherwise.
 
 ```bash
-openssl rand -hex 32
+openssl rand -hex 32   # BRIDGE_MCP_TOKEN  — the agent sends this to the MCP face
+openssl rand -hex 32   # BRIDGE_ACCESS_TOKEN   — the extension sends this to the WebSocket face
 ```
 
-Use the same value on the VM (`BRIDGE_ACCESS_TOKEN`) and in the extension popup.
+Keep them out of the repo. Anything that can read them can drive a logged-in browser.
 
-**A second, different token guards the MCP face** (`BRIDGE_MCP_TOKEN`). The two authenticate
-different parties — the extension dialling in, and an agent asking for work — so they leak through
-different accidents, and the bridge refuses to start if you set them to the same value:
+## 2. VM — run the bridge
+
+Node 22+ (see `.nvmrc`).
 
 ```bash
-export BRIDGE_MCP_TOKEN=$(openssl rand -hex 32)
+npm ci && npm run build
+
+BRIDGE_MCP_TOKEN=… BRIDGE_ACCESS_TOKEN=… node packages/bridge-server/dist/index.js
+# MCP face  → localhost:3000/mcp
+# WS  face  → 0.0.0.0:3002
 ```
 
-## 2. VM — run the bridge-server
+Under pm2, if you want it to survive a reboot:
 
 ```bash
-# build (Node 20+):
-npm install
-npm run build --workspace=packages/bridge-server
-
-# run (MCP face localhost:3000, WS face localhost:3002):
-BRIDGE_ACCESS_TOKEN=<token> BRIDGE_MCP_TOKEN=<mcp-token> MCP_PORT=3000 WS_PORT=3002 \
-  node packages/bridge-server/dist/index.js
-
-# or under pm2:
-BRIDGE_ACCESS_TOKEN=<token> BRIDGE_MCP_TOKEN=<mcp-token> pm2 start packages/bridge-server/dist/index.js --name rbm-bridge
+pm2 start packages/bridge-server/dist/index.js --name rbm-bridge --update-env && pm2 save
 ```
 
-## 3. VM — expose the WS face with cloudflared (no Access)
+Not `pm2 start ecosystem.config.cjs` — that file predates the bridge and starts five processes of
+the retired Playwright architecture, none of which is this server.
 
-This VM already runs a tunnel (`86e859b2…`, pm2 `ceo-tunnel`,
-`~/.cloudflared/config.yml`) serving `aso-agent.subturtle.app → :8787`. The local
-`cert.pem` is only an ARGO TUNNEL TOKEN (can run a tunnel, **cannot** edit DNS via
-`cloudflared tunnel route dns` → "Authentication error"), so rather than create a
-new `browser-ws.subturtle.app` record we **reuse the existing hostname via a path
-rule** (no DNS change). Add the `/rbm-ws` rule *before* the webhook catch-all:
+## 3. VM — publish the WebSocket face
+
+Only the **WS face** is published. The MCP face stays on loopback: the agent runs on the same VM.
+
+`~/.cloudflared/config.yml`:
 
 ```yaml
+tunnel: <tunnel-name>
+credentials-file: /home/<vm-user>/.cloudflared/<tunnel-name>.json
+
 ingress:
-  - hostname: aso-agent.subturtle.app
+  - hostname: <bridge-host>
     path: ^/rbm-ws
-    service: http://127.0.0.1:3002      # bridge WS face
-  - hostname: aso-agent.subturtle.app
-    service: http://localhost:8787      # CEO-Agent webhook (unchanged)
+    service: http://localhost:3002
   - service: http_status:404
 ```
 
-```bash
-cloudflared tunnel --config ~/.cloudflared/config.yml ingress validate
-pm2 restart ceo-tunnel
-```
+Then `cloudflared tunnel route dns <tunnel-name> <bridge-host>` and restart the tunnel.
 
-→ extension **Agent URL = `wss://aso-agent.subturtle.app/rbm-ws`**.
+⚠️ **Whatever you put in front of this hostname is the only network boundary there is.** If you add
+a Cloudflare Access policy, the extension cannot answer its login challenge — it is a background
+service worker, not a person with a browser tab. So either leave the path unprotected and rely on
+`BRIDGE_ACCESS_TOKEN`, or use an Access **service token** and add those headers to the extension's
+request. Decide deliberately; do not discover it later.
 
-> `aso-agent.subturtle.app` has **no** Cloudflare Access policy (verified: `GET /`
-> → 404, not 403), so the browser WebSocket connects fine; auth is the in-band
-> token handshake. The MCP face (`:3000`) stays localhost-only, never tunneled.
->
-> **Cleaner alternative (optional):** add a dedicated `browser-ws.subturtle.app`
-> CNAME → `86e859b2-1a0d-421b-9600-3c8f99f16ed0.cfargotunnel.com` (Proxied) in the
-> Cloudflare dashboard, keep the `browser-ws` ingress rule already in the config,
-> and switch the Agent URL to `wss://browser-ws.subturtle.app`.
+Reusing an existing hostname with a path rule works and saves a DNS record. A dedicated hostname is
+cleaner if you have one to spare.
 
-## 4. VM — point Claude Code at the bridge
+## 4. VM — point the agent at the bridge
 
 ```bash
-claude mcp remove browser 2>/dev/null
-claude mcp remove browser-daemon 2>/dev/null
 claude mcp add --transport http browser http://localhost:3000/mcp \
   --header "Authorization: Bearer $BRIDGE_MCP_TOKEN"
 claude mcp list      # 'browser' → ✓ Connected
 ```
 
-No Cloudflare Access headers — this face is localhost on the VM. The bearer token is a separate
-thing and is **required**: the MCP face used to be served with no authentication at all, on the
-reasoning that loopback was the boundary. It is a boundary right up until somebody adds one tunnel
-ingress rule, and loopback is not a boundary between USERS on a shared box at all. If you do expose
-it, set `BRIDGE_BIND_HOST` deliberately — the token is then the only thing in front of a fully
-logged-in Chrome.
+The bearer token is **required**. The MCP face once had no authentication at all, on the reasoning
+that loopback was the boundary. It is a boundary right up until somebody adds one tunnel ingress
+rule — and it is never a boundary between *users* on a shared box. If you do expose it, set
+`BRIDGE_BIND_HOST` deliberately, and know that the token is then the only thing standing in front of
+a fully logged-in Chrome.
 
-## 5. Mac — load the extension into the Aso Dara profile ONLY
+## 5. Your machine — load the extension, in one profile only
 
-1. Open Chrome in the **Aso Dara** profile.
-2. `chrome://extensions` → enable **Developer mode** → **Load unpacked** →
+1. Create a **dedicated Chrome profile** for the agent. An account-less local profile is best, so
+   Chrome sync cannot copy the extension into or out of it.
+2. In that profile: `chrome://extensions` → **Developer mode** → **Load unpacked** →
    select `packages/extension/`.
-3. **Isolation:** install it in this profile ONLY. Turn OFF Extensions sync so it
-   can't propagate to other profiles. A Chrome extension can only act within its
-   own profile, so this is what keeps the agent off your personal profile.
-4. Open the extension popup, set:
-   - **Agent URL:** `wss://aso-agent.subturtle.app/rbm-ws`
-   - **Access Token:** the token from step 1 (currently `~/rbm-bridge.config.cjs` on the VM)
-   - **Save & Connect** → status should show **“Connected to agent”**.
-5. Keep an Aso Dara window open (background is fine — focus is NOT required). The
-   first browser command attaches `chrome.debugger` and shows a thin
-   *“…started debugging this browser”* bar; leave it (clicking **Cancel**
-   detaches until the next command).
+3. **Install it in this profile only, and turn Extensions sync off.** A Chrome extension can only
+   act inside its own profile — that is the whole isolation story, and sync is the one thing that
+   breaks it.
+4. Open the popup and add a profile:
+   - **Agent URL:** `wss://<bridge-host>/rbm-ws`
+   - **Access Token:** your `BRIDGE_ACCESS_TOKEN`
+   - **Save** → the status line should read *Connected to agent*.
+5. Keep a window of that profile open. Background is fine; focus is not required. The first browser
+   command attaches `chrome.debugger` and Chrome shows a *"…started debugging this browser"* bar —
+   leave it. Clicking **Cancel** detaches until the next command.
 
-## 6. Verify end-to-end
-
-- Bridge health (VM): `curl -s localhost:3000/health` → `"extensionConnected":true`.
-- Local MCP test client (VM): `node packages/bridge-server/dist/test-client.js`
-  → connects, `bridge_ping` returns `pong`.
-- Real run: from the VM ask Claude Code to `check_local_status` then
-  `browser_navigate` to a page and `browser_snapshot` — it should drive the Aso tab.
-
-### Multi-tab & multi-agent sessions
-
-Each MCP client (one agent) is an isolated **session** with its own tab group:
-
-- `browser_tab_new` opens a tab and returns a stable **handle** (`t1`, `t2`, …).
-  Pass it as the `tab` arg to `browser_navigate/snapshot/click/type/…`; omit `tab`
-  to target the session's active tab. `browser_tab_select` changes the active tab.
-- The debugger attaches to **many tabs at once** (one *“…debugging this browser”*
-  bar per attached tab is expected). Commands to different tabs run in parallel;
-  same-tab commands are serialized.
-- Sessions are keyed by the MCP `Mcp-Session-Id` (handled by the SDK client — the
-  agent never sets it). A session can only act on tabs it owns; another session's
-  handle is rejected with `tab_not_owned`. When an agent disconnects, its tabs are
-  closed automatically. Header-less callers share a `default` session (back-compat).
-
-### Keepalive soak test (the make-or-break MV3 risk)
-
-Background/minimize the Aso window, then poll from the VM every ~2 min for hours:
+## 6. Verify
 
 ```bash
-# loops browser_snapshot via the local MCP client; logs ok/latency
-BRIDGE_URL=http://localhost:3000/mcp POLL_TOOL=browser_snapshot \
-  node packages/bridge-server/dist/test-client.js   # wrap in a 2-min loop
+# on the VM
+curl -s localhost:3000/health                       # {"status":"ok",...} — liveness only, no token
+curl -s -H "Authorization: Bearer $BRIDGE_MCP_TOKEN" localhost:3000/status
+                                                    # "extensionConnected": true
+node packages/bridge-server/dist/test-client.js     # bridge_ping → pong
 ```
 
-Pass = every poll succeeds (eviction+revival fast enough to be invisible). If
-long-idle/minimized polls fail, add an offscreen-document keepalive pacemaker.
+`extensionConnected` lives on `/status`, behind the token — `/health` deliberately says nothing
+about who is connected.
 
----
+Then ask the agent to `browser_navigate` somewhere and `browser_snapshot`. You should watch it
+happen in your own window.
 
-## Teardown / revert to the retired path
+### Multi-tab and multi-agent
 
-- Mac: remove the unpacked extension from Aso Dara.
-- VM: `claude mcp remove browser`; stop the bridge + `cloudflared tunnel delete
-  remote-browser-vm`; delete the `browser-ws` DNS record.
-- The old Mac `make start-local` / pm2 Playwright stack still works unchanged.
+Every MCP session gets its own Chrome tab group, so parallel agents keep their tabs separate and
+never touch each other's. Several profiles can each dial their own bridge.
+
+### Keepalive soak
+
+MV3 evicts service workers, which is the make-or-break risk for a long-running session. The
+WebSocket heartbeat plus a `chrome.alarms` keepalive are what survive it. If you are going to trust
+this with a long task, soak it first: loop `browser_snapshot` for an hour and watch for gaps.

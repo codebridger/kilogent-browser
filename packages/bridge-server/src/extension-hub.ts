@@ -45,7 +45,7 @@ function notConnectedResult(): ToolResult {
       {
         type: "text",
         text:
-          "Agent browser not connected. Open the Aso Dara Chrome window and make sure the " +
+          "Agent browser not connected. Open the agent's Chrome window and make sure the " +
           "Remote Browser extension shows 'connected'.",
       },
     ],
