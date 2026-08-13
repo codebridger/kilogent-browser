@@ -1,14 +1,18 @@
-// Shared MCP wiring used by the REPL and the test runners: holds the daemon and
-// Playwright clients, exposes the tool list in provider-neutral form, and routes
-// tool calls to the right server. Resilience lives here:
-//   • lazy (re)connect to Playwright MCP
-//   • a one-time desktop notification before the first browser tool call
-//   • reconnect-and-retry when a Playwright call fails because its Streamable HTTP
-//     session died (e.g. after an operation timeout) — the new session re-attaches
-//     to the same Chrome over CDP, so open tabs persist.
+// MCP wiring for the REPL and the test runners: one client against the bridge, the tool list in
+// provider-neutral form, and reconnect-and-retry when a Streamable HTTP session dies.
+//
+// THIS USED TO BE TWO CLIENTS. The pre-bridge architecture really did have two servers — a local
+// presence daemon and the official Playwright MCP attached to Chrome over CDP — so this class held
+// one connection to each, tracked which server every tool name came from, and routed accordingly.
+// The bridge replaced both, and the duality survived as pure ceremony: two clients dialling the
+// same URL, a `sources` map answering a question with one possible answer, and a dedupe pass whose
+// own comment explained that `check_local_status` appeared twice "when DAEMON_URL and the browser
+// URL point at the same bridge endpoint" — which was every current setup.
+//
+// One endpoint, one client. `check_local_status` is served by the bridge alongside the browser
+// tools, so nothing is lost.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { mcpAuth } from "./auth.js";
 import type { McpToolDef } from "./llm/index.js";
 
@@ -16,7 +20,7 @@ type Part = { type: string; text?: string };
 const getContent = (r: unknown): Part[] => (r as { content?: Part[] }).content ?? [];
 const firstText = (r: unknown): string => getContent(r).find((p) => p.type === "text")?.text ?? "";
 
-/** True for errors that mean the Playwright MCP session is gone and a fresh connect is needed. */
+/** True for errors meaning the Streamable HTTP session is gone and a fresh connect is needed. */
 function isSessionError(err: unknown): boolean {
   return /Session not found|Streamable HTTP error|not connected|Connection closed|fetch failed|ECONNREFUSED/i.test(
     String(err)
@@ -31,139 +35,80 @@ export interface ChromeStatus {
 }
 
 export class McpBridge {
-  daemon: Client | null = null;
-  private playwright: Client | null = null;
-  private sources = new Map<string, "daemon" | "playwright">();
+  private client: Client | null = null;
+  private toolNames = new Set<string>();
   private notified = false;
 
-  /** Called once, just before the first browser (Playwright) tool call. */
+  /** Called once, just before the first browser tool call. */
   onFirstBrowserCall?: () => void;
 
-  constructor(
-    private readonly daemonUrl: string,
-    private readonly playwrightUrl: string
-  ) {}
+  constructor(private readonly mcpUrl: string) {}
 
-  async connectDaemon(): Promise<void> {
+  private async newClient(): Promise<Client> {
     const c = new Client({ name: "remote-browser-agent", version: "0.1.0" });
-    await c.connect(new StreamableHTTPClientTransport(new URL(this.daemonUrl), mcpAuth()));
-    this.daemon = c;
+    await c.connect(new StreamableHTTPClientTransport(new URL(this.mcpUrl), mcpAuth()));
+    return c;
   }
 
-  private async newPlaywright(): Promise<Client> {
-    const base = this.playwrightUrl.replace(/\/$/, "");
-    const c = new Client({ name: "remote-browser-agent", version: "0.1.0" });
-    try {
-      await c.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), mcpAuth()));
-      return c;
-    } catch {
-      const fb = new Client({ name: "remote-browser-agent", version: "0.1.0" });
-      await fb.connect(new SSEClientTransport(new URL(`${base}/sse`), mcpAuth()));
-      return fb;
-    }
+  async connect(): Promise<void> {
+    this.client = await this.newClient();
   }
 
-  /** Returns true if Playwright MCP is reachable. Safe to call repeatedly. */
-  async connectPlaywright(): Promise<boolean> {
-    try {
-      this.playwright = await this.newPlaywright();
-      return true;
-    } catch {
-      this.playwright = null;
-      return false;
-    }
-  }
-
-  get playwrightConnected(): boolean {
-    return this.playwright !== null;
+  get connected(): boolean {
+    return this.client !== null;
   }
 
   async checkStatus(notify = false): Promise<ChromeStatus> {
-    const res = await this.daemon!.callTool({
+    const res = await this.client!.callTool({
       name: "check_local_status",
-      arguments: notify ? { notify: true } : {},
+      arguments: { notify },
     });
     return JSON.parse(firstText(res)) as ChromeStatus;
   }
 
-  /** Provider-neutral tool list. Refreshes the source map and lazily reconnects Playwright. */
+  /** Provider-neutral tool list. */
   async listTools(): Promise<McpToolDef[]> {
     const tools: McpToolDef[] = [];
-    this.sources.clear();
-
-    for (const t of (await this.daemon!.listTools()).tools) {
+    this.toolNames.clear();
+    for (const t of (await this.client!.listTools()).tools) {
       tools.push({ name: t.name, description: t.description ?? "", inputSchema: t.inputSchema });
-      this.sources.set(t.name, "daemon");
+      this.toolNames.add(t.name);
     }
-
-    if (!this.playwright) await this.connectPlaywright();
-    if (this.playwright) {
-      try {
-        for (const t of (await this.playwright.listTools()).tools) {
-          // Dedupe by name: when DAEMON_URL and the browser URL point at the
-          // same bridge endpoint (the new single-endpoint setup), check_local_status
-          // shows up in both lists — keep the first (daemon) source and skip dupes
-          // so the LLM never receives two tools with the same name.
-          if (this.sources.has(t.name)) continue;
-          tools.push({ name: t.name, description: t.description ?? "", inputSchema: t.inputSchema });
-          this.sources.set(t.name, "playwright");
-        }
-      } catch {
-        this.playwright = null; // dropped — next turn reconnects
-      }
-    }
-
     return tools;
   }
 
-  toolCounts(): { daemon: number; playwright: number } {
-    const vals = [...this.sources.values()];
-    return {
-      daemon: vals.filter((s) => s === "daemon").length,
-      playwright: vals.filter((s) => s === "playwright").length,
-    };
+  toolCount(): number {
+    return this.toolNames.size;
   }
 
-  private async rawPlaywrightCall(name: string, args: Record<string, unknown>): Promise<string> {
-    if (!this.playwright) this.playwright = await this.newPlaywright();
-    const res = await this.playwright.callTool({ name, arguments: args });
-    const parts = getContent(res);
-    const text = parts.find((p) => p.type === "text")?.text;
-    if (text) return text;
-    if (parts.some((p) => p.type === "image")) return "[screenshot captured]";
-    return JSON.stringify(parts);
+  private async rawCall(name: string, args: Record<string, unknown>): Promise<string> {
+    if (!this.client) this.client = await this.newClient();
+    const res = await this.client.callTool({ name, arguments: args });
+    return firstText(res);
   }
 
   async callTool(name: string, args: Record<string, unknown>): Promise<string> {
-    const source = this.sources.get(name);
-
-    if (source === "daemon") {
-      return firstText(await this.daemon!.callTool({ name, arguments: args }));
+    // One desktop notification before the first browser command, so the owner of the Chrome knows
+    // something is about to move in it.
+    if (name.startsWith("browser_") && !this.notified) {
+      this.notified = true;
+      this.onFirstBrowserCall?.();
+      await this.checkStatus(true).catch(() => {});
     }
 
-    if (source === "playwright") {
-      if (!this.notified) {
-        this.notified = true;
-        this.onFirstBrowserCall?.();
-        await this.daemon!.callTool({ name: "check_local_status", arguments: { notify: true } }).catch(
-          () => {}
-        );
-      }
+    try {
+      return await this.rawCall(name, args);
+    } catch (err) {
+      if (!isSessionError(err)) throw err;
+      // The session died (commonly after an operation timeout). A fresh one re-attaches to the
+      // same Chrome, so open tabs persist.
+      this.client = null;
       try {
-        return await this.rawPlaywrightCall(name, args);
-      } catch (err) {
-        if (!isSessionError(err)) throw err;
-        // Session died (often after an operation timeout). Reconnect and retry once.
-        this.playwright = null;
-        try {
-          this.playwright = await this.newPlaywright();
-        } catch (e) {
-          throw new Error(`Playwright MCP not reachable after reconnect: ${e}`);
-        }
-        return await this.rawPlaywrightCall(name, args);
+        this.client = await this.newClient();
+      } catch (e) {
+        throw new Error(`Bridge not reachable after reconnect: ${e}`);
       }
+      return await this.rawCall(name, args);
     }
-
-    throw new Error(`Unknown tool: ${name}`);
   }
 }

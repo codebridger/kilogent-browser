@@ -4,8 +4,9 @@ import { selectProvider } from "./llm/index.js";
 import { McpBridge } from "./mcp.js";
 
 // ── Config from env ──────────────────────────────────────────────────────────
-const DAEMON_URL = process.env.DAEMON_URL ?? "http://localhost:3001/mcp";
-const PLAYWRIGHT_URL = process.env.PLAYWRIGHT_URL ?? "http://localhost:3000";
+// One endpoint. DAEMON_URL/PLAYWRIGHT_URL named the two servers of the pre-bridge architecture;
+// the bridge serves both surfaces, so there is one URL and one name for it.
+const BRIDGE_MCP_URL = process.env.BRIDGE_MCP_URL ?? "http://localhost:3000/mcp";
 const provider = selectProvider(process.env.LLM_PROVIDER || undefined);
 // `||` not `??`: an empty MODEL="" (e.g. from an unset compose var) falls back too.
 const MODEL = process.env.MODEL || provider.defaultModel;
@@ -23,8 +24,7 @@ async function main() {
   console.log("║      Remote Browser MCP Agent        ║");
   console.log("╚══════════════════════════════════════╝");
   console.log();
-  console.log(`Daemon    : ${DAEMON_URL}`);
-  console.log(`Playwright: ${PLAYWRIGHT_URL}`);
+  console.log(`Bridge    : ${BRIDGE_MCP_URL}`);
   console.log(`Provider  : ${provider.name}`);
   console.log(`Model     : ${MODEL}`);
   console.log();
@@ -34,22 +34,19 @@ async function main() {
     process.exit(1);
   }
 
-  const bridge = new McpBridge(DAEMON_URL, PLAYWRIGHT_URL);
+  const bridge = new McpBridge(BRIDGE_MCP_URL);
 
-  // Connect to daemon (required)
-  process.stdout.write("Connecting to daemon... ");
+  process.stdout.write("Connecting to the bridge... ");
   try {
-    await bridge.connectDaemon();
+    await bridge.connect();
     console.log("✓");
   } catch (err) {
     console.log(`✗\n  ${err}`);
-    console.error("\nCannot reach the daemon. Is it running?");
+    console.error(
+      "\nCannot reach the bridge. Is it running, and is BRIDGE_MCP_TOKEN the value it was started with?"
+    );
     process.exit(1);
   }
-
-  // Connect to Playwright MCP (optional — may not be running yet)
-  process.stdout.write("Connecting to Playwright MCP... ");
-  console.log((await bridge.connectPlaywright()) ? "✓" : "✗ (will retry on first browser command)");
 
   // Initial status check
   console.log();
@@ -58,8 +55,8 @@ async function main() {
     console.log(`Status: ${status.message}`);
     if (!status.chrome_running) {
       console.log(
-        "\n⚠  Chrome is not running or remote debugging is not enabled.\n" +
-          "   Open Chrome and visit chrome://inspect/#remote-debugging to enable it."
+        "\n⚠  No browser is attached. Open a window of the Chrome profile that has the extension\n" +
+          "   installed, and check the popup reads Connected."
       );
     }
   } catch (err) {
@@ -67,10 +64,7 @@ async function main() {
   }
 
   const initialTools = await bridge.listTools();
-  const counts = bridge.toolCounts();
-  console.log(
-    `\nTools available: ${initialTools.length} (${counts.daemon} daemon + ${counts.playwright} playwright)\n`
-  );
+  console.log(`\nTools available: ${initialTools.length}\n`);
 
   const session = provider.createSession({
     systemPrompt: SYSTEM_PROMPT,

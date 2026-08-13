@@ -37,7 +37,10 @@ const FORBIDDEN = [
   [/\bkilogent\b/i, 'a private product name'],
   [/\blumi\b/i, 'a private product name'],
   [/aso[\s-]?dara/i, "a private Chrome profile name"],
-  [/\baso-agent\b/i, 'a private hostname'],
+  // Not `aso-agent` alone. That was the pattern, and it missed `aso-window` (a Makefile target) and
+  // `ASO_PROFILE_NAME` (an env var) sitting in tracked files the whole time — a guard that names one
+  // compound catches one compound. Match the prefix wherever it starts an identifier.
+  [/\baso[-_][a-z]/i, 'a private name'],
   [/\bceo-tunnel\b/i, 'a private pm2 process name'],
   [/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/, 'a bare IP address'],
   [/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i, 'a UUID (tunnel or account id)'],

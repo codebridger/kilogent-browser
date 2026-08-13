@@ -4,11 +4,9 @@
 // transports the agent uses.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { mcpAuth } from "./auth.js";
 
-const DAEMON_URL = process.env.DAEMON_URL ?? "http://localhost:3000/mcp";
-const PLAYWRIGHT_URL = process.env.PLAYWRIGHT_URL ?? "http://localhost:3000";
+const BRIDGE_MCP_URL = process.env.BRIDGE_MCP_URL ?? "http://localhost:3000/mcp";
 const TEST_URL = process.env.TEST_URL ?? "https://example.com";
 
 type Part = { type: string; text?: string };
@@ -22,55 +20,36 @@ const fail = (m: string) => {
   failures++;
 };
 
-async function connectPlaywright(): Promise<Client> {
-  const base = PLAYWRIGHT_URL.replace(/\/$/, "");
-  const client = new Client({ name: "smoke-test", version: "0.1.0" });
-  try {
-    await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), mcpAuth()));
-    return client;
-  } catch {
-    const fb = new Client({ name: "smoke-test", version: "0.1.0" });
-    await fb.connect(new SSEClientTransport(new URL(`${base}/sse`), mcpAuth()));
-    return fb;
-  }
-}
-
 async function main() {
   console.log("Remote Browser MCP — smoke test\n");
 
-  // 1. Daemon
-  console.log("Daemon:");
-  const daemon = new Client({ name: "smoke-test", version: "0.1.0" });
-  await daemon.connect(new StreamableHTTPClientTransport(new URL(DAEMON_URL), mcpAuth()));
-  pass(`connected to ${DAEMON_URL}`);
-
-  const dTools = await daemon.listTools();
-  dTools.tools.some((t) => t.name === "check_local_status")
-    ? pass("check_local_status tool present")
-    : fail("check_local_status tool missing");
-
-  const status = JSON.parse(
-    firstText(await daemon.callTool({ name: "check_local_status", arguments: {} }))
-  );
-  console.log(`    status: ${status.message}`);
-  status.online ? pass("machine reported online") : fail("machine reported offline");
-
-  // 2. Playwright MCP
-  console.log("\nPlaywright MCP:");
+  // One endpoint serves both surfaces: check_local_status AND the browser_* tools. This used to be
+  // two connections to two servers, and became two connections to the same URL.
+  console.log("Bridge:");
   let pw: Client;
   try {
-    pw = await connectPlaywright();
-    pass(`connected to ${PLAYWRIGHT_URL}`);
+    pw = new Client({ name: "smoke-test", version: "0.1.0" });
+    await pw.connect(new StreamableHTTPClientTransport(new URL(BRIDGE_MCP_URL), mcpAuth()));
+    pass(`connected to ${BRIDGE_MCP_URL}`);
   } catch (err) {
     fail(`could not connect: ${err}`);
     summary();
     return;
   }
 
-  const pwTools = await pw.listTools();
-  pwTools.tools.some((t) => t.name === "browser_navigate")
-    ? pass(`browser tools present (${pwTools.tools.length} tools)`)
+  const tools = await pw.listTools();
+  tools.tools.some((t) => t.name === "check_local_status")
+    ? pass("check_local_status tool present")
+    : fail("check_local_status tool missing");
+  tools.tools.some((t) => t.name === "browser_navigate")
+    ? pass(`browser tools present (${tools.tools.length} tools)`)
     : fail("browser_navigate tool missing");
+
+  const status = JSON.parse(
+    firstText(await pw.callTool({ name: "check_local_status", arguments: {} }))
+  );
+  console.log(`    status: ${status.message}`);
+  status.online ? pass("machine reported online") : fail("machine reported offline");
 
   // 3. Drive the browser
   if (status.chrome_debug_accessible) {
