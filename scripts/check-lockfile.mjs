@@ -8,7 +8,7 @@
 // opposite.
 //
 // It happened here: the relay package was RENAMED after the last install, so the lock still carried
-// `@lumi.ai/relay@0.1.2` for `packages/relay`. Eight test lanes passed; `npm ci` refused with
+// a stale name for `packages/relay`. Eight test lanes passed; `npm ci` refused with
 // "Missing: remote-browser-relay@0.2.0 from lock file".
 //
 // `npm ci --dry-run` would also catch it, and costs a network round trip and several seconds. This

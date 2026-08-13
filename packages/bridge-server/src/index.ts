@@ -94,7 +94,7 @@ function localStatus(sessionId?: string) {
       chrome_debug_accessible: false,
       message:
         "Bridge is online but the agent browser extension is not connected. " +
-        "Open the Aso Dara Chrome window and confirm the Remote Browser extension shows 'connected'.",
+        "Open the agent's Chrome window and confirm the Remote Browser extension shows 'connected'.",
     };
   }
   const owned = hub.tabCountFor(sessionId);
@@ -104,7 +104,7 @@ function localStatus(sessionId?: string) {
     chrome_debug_accessible: true,
     tabs_owned: owned,
     message:
-      "Bridge online and the agent browser (Aso Dara) is connected and ready for remote control." +
+      "Bridge online and the agent browser is connected and ready for remote control." +
       (owned > 0 ? ` This session owns ${owned} tab(s).` : ""),
   };
 }
@@ -118,7 +118,7 @@ function buildServer(getSessionId: () => string | undefined): McpServer {
   // Status tool — same name/shape as the daemon's so CONTRACT.md is unchanged.
   srv.tool(
     "check_local_status",
-    "Check whether the agent browser (Aso Dara) is connected and ready for remote control. " +
+    "Check whether the agent browser is connected and ready for remote control. " +
       "Call this before issuing browser commands.",
     { notify: z.boolean().optional().describe("Reserved; accepted for compatibility") },
     async () => ({

@@ -1,20 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ── open-aso-window.sh ────────────────────────────────────────────────────────
+# ── open-agent-window.sh ────────────────────────────────────────────────────────
 # Ensure the agent's Chrome profile has a window OPEN, so the Playwright MCP Bridge
 # extension's background worker is alive and the VM agent can attach. The window may
 # sit in the background — focus is NOT required; it just has to exist. (If the profile
 # has no window, the extension isn't loaded and connections fall through / time out.)
 #
-# The profile is named by DISPLAY NAME (ASO_PROFILE_NAME) and resolved to its
+# The profile is named by DISPLAY NAME (AGENT_PROFILE_NAME) and resolved to its
 # "Profile N" directory via Chrome's Local State — never hardcode the number.
 # ─────────────────────────────────────────────────────────────────────────────
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [[ -f "$SCRIPT_DIR/.rbm-env" ]] && source "$SCRIPT_DIR/.rbm-env"
 
-ASO_PROFILE_NAME="${ASO_PROFILE_NAME:-Aso Dara}"
+# The Chrome profile DISPLAY NAME the agent drives. Yours to set — there is no default,
+# because guessing somebody else's profile name is how a script opens the wrong browser.
+AGENT_PROFILE_NAME="${AGENT_PROFILE_NAME:?set AGENT_PROFILE_NAME to the agent Chrome profile's display name}"
 CHROME_DIR="${CHROME_DIR:-$HOME/Library/Application Support/Google/Chrome}"
 CHROME_BIN="${CHROME_BIN:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
 EXT_ID="mmlmfjhmonkocbjadbfplnigmagldckm"   # Playwright MCP Bridge
@@ -26,7 +28,7 @@ die()  { echo "✗  $*" >&2; exit 1; }
 [[ -f "$CHROME_DIR/Local State" ]] || die "Chrome Local State not found under: $CHROME_DIR"
 
 # Resolve display name -> profile directory.
-PROFILE_DIR="$(python3 - "$ASO_PROFILE_NAME" <<PY
+PROFILE_DIR="$(python3 - "$AGENT_PROFILE_NAME" <<PY
 import json, os, sys
 name = sys.argv[1]
 ls = json.load(open(os.path.expanduser("$CHROME_DIR/Local State")))
@@ -35,8 +37,8 @@ for d, info in ls.get("profile", {}).get("info_cache", {}).items():
         print(d); break
 PY
 )"
-[[ -n "$PROFILE_DIR" ]] || die "No Chrome profile named '$ASO_PROFILE_NAME' found in Local State."
-log "Agent profile '$ASO_PROFILE_NAME' = '$PROFILE_DIR'"
+[[ -n "$PROFILE_DIR" ]] || die "No Chrome profile named '$AGENT_PROFILE_NAME' found in Local State."
+log "Agent profile '$AGENT_PROFILE_NAME' = '$PROFILE_DIR'"
 
 # Safety: the bridge extension must be installed ONLY in this profile.
 others="$(ls -d "$CHROME_DIR"/*/Extensions/"$EXT_ID" 2>/dev/null | sed "s|$CHROME_DIR/||;s|/Extensions/.*||" | grep -vx "$PROFILE_DIR" || true)"
@@ -45,9 +47,9 @@ if [[ -n "$others" ]]; then
   echo "⚠  That breaks isolation — remove it from those profiles (chrome://extensions)."
 fi
 [[ -d "$CHROME_DIR/$PROFILE_DIR/Extensions/$EXT_ID" ]] || \
-  echo "⚠  The bridge extension is NOT in '$ASO_PROFILE_NAME' — install it there first."
+  echo "⚠  The bridge extension is NOT in '$AGENT_PROFILE_NAME' — install it there first."
 
 # Open a window for the profile (background is fine). about:blank guarantees a usable
 # page target so the first browser command doesn't hit "0 page targets".
 "$CHROME_BIN" --profile-directory="$PROFILE_DIR" about:blank >/dev/null 2>&1 &
-log "Opened a window for '$ASO_PROFILE_NAME'. Keep it open (background OK) while the agent may browse."
+log "Opened a window for '$AGENT_PROFILE_NAME'. Keep it open (background OK) while the agent may browse."

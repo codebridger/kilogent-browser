@@ -146,7 +146,7 @@ function serviceChecks(): Check[] {
       name: "service env",
       status: "fail",
       detail: `the unit reads ${status.envFilePath}, but this CLI configures ${envFile()}`,
-      fix: `Re-run \`${RELAY_NAME} service install\`, or set LUMI_RELAY_HOME to match the unit.`,
+      fix: `Re-run \`${RELAY_NAME} service install\`, or set REMOTE_BROWSER_RELAY_HOME to match the unit.`,
     });
   }
 

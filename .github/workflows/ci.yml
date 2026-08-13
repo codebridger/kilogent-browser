@@ -48,6 +48,11 @@ jobs:
       - name: Manifest and modules
         run: npm run test:extension
 
+      # This is a PUBLIC repo. It once carried a live VM address, four resolving hostnames, a tunnel
+      # UUID and a private profile name — none of it secret, all of it somebody's infrastructure.
+      - name: No private infrastructure
+        run: npm run test:private
+
       - name: Tests
         run: |
           npm run test:snapshot

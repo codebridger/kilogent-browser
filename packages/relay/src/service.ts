@@ -30,7 +30,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { envFile, logDir, migrateLegacyConfigDir } from "./paths.js";
+import { envFile, logDir } from "./paths.js";
 import { RELAY_NAME } from "./version.js";
 
 /**
@@ -49,8 +49,6 @@ export const SERVICE_LABEL = "com.remote-browser.relay";
 export const LINUX_UNIT = "remote-browser-relay.service";
 
 /** What they were called before. Used only to tear the old one down. */
-export const LEGACY_SERVICE_LABEL = "com.lumi.relay";
-const LEGACY_LINUX_UNIT = "lumi-relay.service";
 
 /** Must exceed `RELAY_DRAIN_GRACE_MS` (default 20 s) — a SIGKILL mid-drain is exactly the
  *  hung-up-on click that draining exists to prevent. */
@@ -295,48 +293,9 @@ export function serviceStatus(): ServiceStatus {
  * units both exec'ing the relay would both bind the port, and the loser crash-loops under
  * `Restart=always` while the winner looks fine — a failure that reads like a broken relay rather
  * than like two of them.
- *
- * Every step is best-effort. A box that never had the old names must not fail to install because
- * `systemctl disable` had nothing to disable.
  */
-export function uninstallLegacyService(): { removed: boolean; what?: string } {
-  if (process.platform === "linux") {
-    const unitPath = path.join(os.homedir(), ".config/systemd/user", LEGACY_LINUX_UNIT);
-    if (!fs.existsSync(unitPath)) return { removed: false };
-    run("systemctl", ["--user", "disable", "--now", LEGACY_LINUX_UNIT]);
-    try {
-      fs.rmSync(unitPath, { force: true });
-    } catch {
-      /* best effort */
-    }
-    run("systemctl", ["--user", "daemon-reload"]);
-    return { removed: true, what: LEGACY_LINUX_UNIT };
-  }
-  if (process.platform === "darwin") {
-    const plist = path.join(os.homedir(), "Library/LaunchAgents", `${LEGACY_SERVICE_LABEL}.plist`);
-    if (!fs.existsSync(plist)) return { removed: false };
-    run("launchctl", ["bootout", `gui/${uid()}/${LEGACY_SERVICE_LABEL}`]);
-    try {
-      fs.rmSync(plist, { force: true });
-    } catch {
-      /* best effort */
-    }
-    return { removed: true, what: `${LEGACY_SERVICE_LABEL}.plist` };
-  }
-  return { removed: false };
-}
-
 export function installService(): InstallResult {
   const notes: string[] = [];
-
-  // MIGRATION, and the order inside it is the whole point. The config directory moves FIRST,
-  // because `envFile()` and `logDir()` below resolve through it and the unit bakes that path in —
-  // installing first would write a unit pointing at a directory that is about to move. Then the
-  // old unit goes, before the new one is written, so the two never run at once.
-  const moved = migrateLegacyConfigDir();
-  if (moved.moved) notes.push(`Moved ${moved.from} to ${moved.to}.`);
-  const shed = uninstallLegacyService();
-  if (shed.removed) notes.push(`Removed the old service (${shed.what}).`);
 
   fs.mkdirSync(logDir(), { recursive: true, mode: 0o700 });
 

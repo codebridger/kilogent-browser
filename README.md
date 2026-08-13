@@ -36,7 +36,7 @@ There are two halves that meet over an authenticated WebSocket:
 
 ```
    ┌──────────────────────── CLOUD VM ────────────────────────┐        ┌───────────── YOUR MACHINE ─────────────┐
-   │  AI Agent  ──MCP──▶  bridge-server                        │        │  MV3 extension  (Aso Dara profile)     │
+   │  AI Agent  ──MCP──▶  bridge-server                        │        │  MV3 extension  (agent profile)        │
    │  (Claude Code /       ├─ MCP face  localhost:3000/mcp     │        │    │                                    │
    │   packages/agent)     └─ WS  face  localhost:3002 ◀───────┼── wss ─┼────┘  dials OUT, token-authenticated   │
    │                          published by cloudflared         │        │    chrome.debugger / CDP  ──▶  a tab   │
@@ -157,7 +157,7 @@ Publish the WS face with `cloudflared` and point the VM's agent at the MCP face
 
 ### 2 · Machine — load the extension (one dedicated profile)
 
-1. Create a **dedicated Chrome profile** for the agent (e.g. "Aso Dara"), ideally an account-less local profile so Chrome sync can't copy the extension into or out of it.
+1. Create a **dedicated Chrome profile** for the agent, ideally an account-less local profile so Chrome sync can't copy the extension into or out of it.
 2. `chrome://extensions` → **Developer mode** → **Load unpacked** → select [`packages/extension/`](packages/extension). Install it in **only** this profile, and turn **off** Extensions sync — that isolation is what keeps the agent off your other profiles.
 3. Open the popup and set **Agent URL** (`wss://…/rbm-ws`) + **Access Token** (the token from step 1) → **Save & Connect**. Status should read *Connected to agent*.
 4. Keep a window of that profile open whenever the agent may browse — **background is fine, focus is not required**. The first command attaches `chrome.debugger` and shows Chrome's "…started debugging this browser" bar; leave it in place.
