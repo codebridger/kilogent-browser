@@ -71,6 +71,34 @@ for (const file of modules) {
   }
 }
 
+// ── Every control the docs tell a reader to press has to exist ────────────────────────────────
+//
+// The README said: set Agent URL + Access Token, then press **Save & Connect**, and wait for the
+// status *Connected to agent*. The button is labelled `Save` and the status reads `Connected` —
+// neither quoted string has ever appeared in the extension. A reader following those instructions
+// looks for a control that is not there and concludes the build is broken.
+//
+// Positive assertions, like the branding check in the fork: "the docs quote this, so the product
+// must still say it". Rename a label deliberately and this fails, which is the point — it is the
+// one place that knows the docs need the same edit.
+const popupSrc = jsFiles(path.join(DIR, 'src', 'providers'))
+  .map((f) => fs.readFileSync(f, "utf8"))
+  .join('\n');
+
+/** [what the docs call it, the literal the extension must still contain] */
+const QUOTED_IN_DOCS = [
+  ['the save button', '>Save<'],
+  ['the add-profile button', '+ Add profile'],
+  ['the URL field label', '>Agent URL<'],
+  ['the token field label', '>Access Token<'],
+  ['the connected status', 'Connected'],
+];
+for (const [what, literal] of QUOTED_IN_DOCS) {
+  if (popupSrc.includes(literal)) continue;
+  fail(`${what} — the docs quote ${JSON.stringify(literal)}, the popup no longer contains it.\n` +
+       `      If you renamed it on purpose, update README.md and BRIDGE-SETUP.md in this commit.`);
+}
+
 if (failed > 0) {
   console.error(`\n✗ extension: ${failed} problem(s).`);
   process.exit(1);

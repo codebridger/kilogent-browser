@@ -22,7 +22,7 @@ Two, not one, and they must differ — the bridge refuses to start otherwise.
 
 ```bash
 openssl rand -hex 32   # BRIDGE_MCP_TOKEN  — the agent sends this to the MCP face
-openssl rand -hex 32   # BRIDGE_WS_TOKEN   — the extension sends this to the WebSocket face
+openssl rand -hex 32   # BRIDGE_ACCESS_TOKEN   — the extension sends this to the WebSocket face
 ```
 
 Keep them out of the repo. Anything that can read them can drive a logged-in browser.
@@ -34,7 +34,7 @@ Node 22+ (see `.nvmrc`).
 ```bash
 npm ci && npm run build
 
-BRIDGE_MCP_TOKEN=… BRIDGE_WS_TOKEN=… node packages/bridge-server/dist/index.js
+BRIDGE_MCP_TOKEN=… BRIDGE_ACCESS_TOKEN=… node packages/bridge-server/dist/index.js
 # MCP face  → localhost:3000/mcp
 # WS  face  → 0.0.0.0:3002
 ```
@@ -42,8 +42,11 @@ BRIDGE_MCP_TOKEN=… BRIDGE_WS_TOKEN=… node packages/bridge-server/dist/index.
 Under pm2, if you want it to survive a reboot:
 
 ```bash
-pm2 start ecosystem.config.cjs && pm2 save
+pm2 start packages/bridge-server/dist/index.js --name rbm-bridge --update-env && pm2 save
 ```
+
+Not `pm2 start ecosystem.config.cjs` — that file predates the bridge and starts five processes of
+the retired Playwright architecture, none of which is this server.
 
 ## 3. VM — publish the WebSocket face
 
@@ -67,7 +70,7 @@ Then `cloudflared tunnel route dns <tunnel-name> <bridge-host>` and restart the 
 ⚠️ **Whatever you put in front of this hostname is the only network boundary there is.** If you add
 a Cloudflare Access policy, the extension cannot answer its login challenge — it is a background
 service worker, not a person with a browser tab. So either leave the path unprotected and rely on
-`BRIDGE_WS_TOKEN`, or use an Access **service token** and add those headers to the extension's
+`BRIDGE_ACCESS_TOKEN`, or use an Access **service token** and add those headers to the extension's
 request. Decide deliberately; do not discover it later.
 
 Reusing an existing hostname with a path rule works and saves a DNS record. A dedicated hostname is
@@ -98,7 +101,7 @@ a fully logged-in Chrome.
    breaks it.
 4. Open the popup and add a profile:
    - **Agent URL:** `wss://<bridge-host>/rbm-ws`
-   - **Access Token:** your `BRIDGE_WS_TOKEN`
+   - **Access Token:** your `BRIDGE_ACCESS_TOKEN`
    - **Save** → the status line should read *Connected to agent*.
 5. Keep a window of that profile open. Background is fine; focus is not required. The first browser
    command attaches `chrome.debugger` and Chrome shows a *"…started debugging this browser"* bar —
@@ -108,7 +111,7 @@ a fully logged-in Chrome.
 
 ```bash
 # on the VM
-curl -s localhost:3000/health                       # {"ok":true} — liveness only, no token
+curl -s localhost:3000/health                       # {"status":"ok",...} — liveness only, no token
 curl -s -H "Authorization: Bearer $BRIDGE_MCP_TOKEN" localhost:3000/status
                                                     # "extensionConnected": true
 node packages/bridge-server/dist/test-client.js     # bridge_ping → pong

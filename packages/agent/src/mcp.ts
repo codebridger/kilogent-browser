@@ -9,6 +9,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { mcpAuth } from "./auth.js";
 import type { McpToolDef } from "./llm/index.js";
 
 type Part = { type: string; text?: string };
@@ -45,7 +46,7 @@ export class McpBridge {
 
   async connectDaemon(): Promise<void> {
     const c = new Client({ name: "remote-browser-agent", version: "0.1.0" });
-    await c.connect(new StreamableHTTPClientTransport(new URL(this.daemonUrl)));
+    await c.connect(new StreamableHTTPClientTransport(new URL(this.daemonUrl), mcpAuth()));
     this.daemon = c;
   }
 
@@ -53,11 +54,11 @@ export class McpBridge {
     const base = this.playwrightUrl.replace(/\/$/, "");
     const c = new Client({ name: "remote-browser-agent", version: "0.1.0" });
     try {
-      await c.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`)));
+      await c.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), mcpAuth()));
       return c;
     } catch {
       const fb = new Client({ name: "remote-browser-agent", version: "0.1.0" });
-      await fb.connect(new SSEClientTransport(new URL(`${base}/sse`)));
+      await fb.connect(new SSEClientTransport(new URL(`${base}/sse`), mcpAuth()));
       return fb;
     }
   }
