@@ -56,6 +56,8 @@ const ok = (cond, m) => (cond ? pass(m) : fail(m));
 // ── mock chrome.* (the same shape mock-profiles-harness.mjs uses) ──────────────────────────────
 let nextTabId = 100;
 /** Where the next click lands the tab. Null = a click does not navigate. */
+/** Backs the connection's persisted session policies. */
+const fakeStore = {};
 let clickLandsOn = null;
 /** When set, a click's navigation is REFUSED by interception and the tab does NOT move. */
 let clickBlockedBy = null;
@@ -238,6 +240,13 @@ async function main() {
           onAttached: (chromeTabId) => conn.armTab(chromeTabId),
         }),
       mintTicket,
+      // A REAL in-memory storage, not a no-op: the session policy is persisted now, and a stub that
+      // swallowed writes would hide the very bug this exists to prevent — a restart losing the list.
+      storage: {
+        get: async (key) => (key in fakeStore ? { [key]: fakeStore[key] } : {}),
+        set: async (obj) => void Object.assign(fakeStore, obj),
+        remove: async (key) => void delete fakeStore[key],
+      },
       ownBlocklist: () => ownBlocklist,
       effectiveBlocklist,
       isBlocked,
@@ -432,6 +441,59 @@ async function main() {
     conn.blockedCountFor("job2") > 0 && conn.blockedCountFor("job1") === 0,
     "the ledger is per-session — job1 carries none of job2's refusals",
   );
+
+  // ── THE BUG A LIVE AGENT FOUND: a restart used to open the browser up ─────────────────────────
+  //
+  // `sessionBlocklists` was a plain in-memory Map and `blocklistFor` defaulted a MISSING entry to
+  // `[]` — which every check downstream reads as "the Ship blocks nothing". So: the worker restarts
+  // (an extension reload, or any MV3 eviction), the map is empty, the relay does NOT re-send
+  // `session_open` because its own session is still open, and every address is allowed. An agent
+  // clicked a plain link to a blocked origin and read the whole page.
+  {
+    // A brand-new connection over the SAME storage is exactly what a restarted worker is.
+    const restarted = new KilogentConnection(
+      { ownerUid: OWNER, browserId: BROWSER_ID, endpoint: "http://127.0.0.1:1", projectId: "p" },
+      {
+        WebSocketCtor: WsWebSocket,
+        makeExecutor: (pushStatus, label) => new Executor(pushStatus, label),
+        mintTicket: async () => ({ ticket: "x", relayUrl: "ws://127.0.0.1:1" }),
+        storage: {
+          get: async (key) => (key in fakeStore ? { [key]: fakeStore[key] } : {}),
+          set: async (obj) => void Object.assign(fakeStore, obj),
+          remove: async (key) => void delete fakeStore[key],
+        },
+        ownBlocklist: () => [],
+        effectiveBlocklist,
+        isBlocked,
+        onStateChange: () => {},
+        log: () => {},
+      },
+    );
+
+    ok(
+      !restarted.knowsSession("job2"),
+      "a fresh worker starts knowing nothing — an empty map is the state the bug lived in",
+    );
+    ok(
+      restarted.allowUrl("https://bank.test/anything", { sessionId: "job2" }) !== true,
+      "and refuses while it is unknown, rather than allowing everything",
+    );
+
+    await restarted.restoreSessions();
+    ok(
+      restarted.knowsSession("job2"),
+      "the persisted policy is restored — this is what the relay will not re-send",
+    );
+    ok(
+      restarted.allowUrl("https://bank.test/anything", { sessionId: "job2" }) !== true,
+      "and the blocked origin is STILL blocked after the restart",
+    );
+    ok(
+      restarted.allowUrl("https://ok.test/page", { sessionId: "job2" }) === true,
+      "while an allowed one still passes — restored, not merely refusing everything",
+    );
+    restarted.closed = true;
+  }
 
   // And the command itself is undisturbed: two sessions run concurrently on one connection.
   const otherSession = await dispatch(port, {

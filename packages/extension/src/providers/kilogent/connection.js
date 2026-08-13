@@ -19,6 +19,8 @@ const DEFAULT_HEARTBEAT_MS = 20000;
 const BACKOFF_BASE_MS = 1000;
 const BACKOFF_CAP_MS = 30000;
 
+import { KEYS } from "./config.js";
+
 export class KilogentConnection {
   /**
    * @param {{browserId:string,label:string,agentString?:string,extensionVersion?:string}} identity
@@ -75,6 +77,9 @@ export class KilogentConnection {
    * this transport should keep its own wording.
    */
   allowUrl(url, ctx) {
+    // UNKNOWN REFUSES. Not knowing the policy is not the same as the policy being empty — see
+    // `knowsSession`. This is the arm that used to say yes to everything after a worker restart.
+    if (!this.knowsSession(ctx?.sessionId)) return this.unknownPolicyRefusal();
     return this.deps.isBlocked(url, this.blocklistFor(ctx?.sessionId))
       ? "That address is blocked on this browser. Ask its owner, or a captain — you cannot change this yourself."
       : true;
@@ -138,7 +143,10 @@ export class KilogentConnection {
     const idx = this.executor.tabIndex.get(tabId);
     const url = params?.request?.url;
     const allowed =
-      !!idx && typeof url === "string" && !this.deps.isBlocked(url, this.blocklistFor(idx.sessionId));
+      !!idx &&
+      typeof url === "string" &&
+      this.knowsSession(idx.sessionId) &&
+      !this.deps.isBlocked(url, this.blocklistFor(idx.sessionId));
 
     try {
       if (allowed) {
@@ -161,9 +169,59 @@ export class KilogentConnection {
     }
   }
 
+  /**
+   * Do we actually KNOW this session's policy?
+   *
+   * The distinction `?? []` erased, and it is the whole bug. An empty list means "the Ship blocks
+   * nothing"; a MISSING entry means "we have no idea what the Ship blocks". Treating the second as
+   * the first is how a browser with a blocklist allowed everything: the worker restarts, this map is
+   * empty, the relay does not re-send `session_open` because ITS session is still open — and every
+   * check downstream asked an empty list and was told yes.
+   */
+  knowsSession(sessionId) {
+    return this.sessionBlocklists.has(sessionId);
+  }
+
   blocklistFor(sessionId) {
     const ship = this.sessionBlocklists.get(sessionId) ?? [];
     return this.deps.effectiveBlocklist(ship, this.deps.ownBlocklist());
+  }
+
+  /** The refusal used wherever the policy is unknown. Fails CLOSED, on purpose. */
+  unknownPolicyRefusal() {
+    return (
+      "This browser cannot confirm what it is allowed to open right now, so it refused. " +
+      "Try again in a moment; if it keeps happening, ask its owner to reopen the browser."
+    );
+  }
+
+  /**
+   * Restore persisted session policies, once, before anything is judged.
+   *
+   * Awaited by `handleCmd`, so a command that arrives while the worker is still warming up waits
+   * rather than being judged against a map that is not filled in yet.
+   */
+  async restoreSessions() {
+    try {
+      const store = await this.deps.storage.get(KEYS.sessions);
+      const saved = store?.[KEYS.sessions];
+      if (saved && typeof saved === "object") {
+        for (const [sid, origins] of Object.entries(saved)) {
+          if (!this.sessionBlocklists.has(sid) && Array.isArray(origins)) {
+            this.sessionBlocklists.set(sid, origins);
+          }
+        }
+      }
+    } catch (e) {
+      // Storage unavailable. Everything stays unknown, which refuses rather than allows.
+    }
+  }
+
+  /** Write the map back, so the next worker starts knowing what this one knew. */
+  persistSessions() {
+    const out = {};
+    for (const [sid, origins] of this.sessionBlocklists) out[sid] = origins;
+    void this.deps.storage.set({ [KEYS.sessions]: out }).catch(() => {});
   }
 
   async connect() {
@@ -296,6 +354,7 @@ export class KilogentConnection {
         break;
       case "session_open":
         this.sessionBlocklists.set(m.sessionId, m.blockedOrigins ?? []);
+        this.persistSessions();
         this.executor.getSession(m.sessionId);
         break;
       case "session_config":
@@ -304,10 +363,12 @@ export class KilogentConnection {
         // failure than one more action on a page that has just become disallowed.
         if (this.sessionBlocklists.has(m.sessionId)) {
           this.sessionBlocklists.set(m.sessionId, m.blockedOrigins ?? []);
+          this.persistSessions();
         }
         break;
       case "session_close":
         this.sessionBlocklists.delete(m.sessionId);
+        this.persistSessions();
         this.executor
           .closeSession(m.sessionId)
           .finally(() => this.send({ t: "session_closed", sessionId: m.sessionId }));
@@ -317,6 +378,21 @@ export class KilogentConnection {
 
   async handleCmd(m) {
     const args = m.args || {};
+    // ONCE, and before anything is judged: a command that arrives while this worker is still warming
+    // up must wait for the persisted policy rather than be measured against a map that is not filled
+    // in yet. `restoreSessions` never rejects, so this cannot wedge the command loop.
+    this.restored ??= this.restoreSessions();
+    await this.restored;
+
+    if (!this.knowsSession(m.sessionId)) {
+      this.send({
+        t: "res",
+        id: m.id,
+        ok: false,
+        error: { code: "blocked", message: this.unknownPolicyRefusal() },
+      });
+      return;
+    }
     // Checked HERE as well as in Crew, because a URL can also arrive without any tool naming it —
     // a click on a link. This arm catches the one an argument names.
     //
