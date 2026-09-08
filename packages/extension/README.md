@@ -9,8 +9,10 @@ There is **no build step**. The directory you are reading is the extension — l
 
 1. `chrome://extensions` → turn on **Developer mode**.
 2. **Load unpacked** → choose this directory (`packages/extension`).
-3. Click the extension → **Sign in with Kilogent**. A tab opens at `crew.kilogent.com/connect-browser`
-   with the code pre-filled; approve it there.
+3. Click the extension → **Sign in with Kilogent**. A tab opens on your Kilogent workspace, at
+   `/connect-browser`, with the code pre-filled; approve it there. The host is not written down
+   anywhere in the extension — the backend supplies the whole URL, so it follows the workspace
+   rather than needing an update here.
 4. Back in the popup, tick the workspaces this browser should be offered to.
 
 That is all the setup there is. Nothing else is typed — the extension ships knowing one public URL

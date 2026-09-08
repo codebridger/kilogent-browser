@@ -10,16 +10,39 @@
 // refuses every call that is not signed in, and the only unauthenticated ones are the two halves
 // of a device handshake that is worthless until a human approves it.
 
-/** Production. Overridable per install for development — see `resolveEndpoint`. */
+/**
+ * The one environment this build is wired to.
+ *
+ * ⚠️ THIS IS THE DEVELOPMENT PROJECT, not production, and the difference is invisible from inside
+ * the extension — every screen looks identical whichever backend answers. It said "Production"
+ * here for months while naming a dev project id, which is the kind of comment that survives
+ * precisely because nobody can contradict it by using the software.
+ *
+ * There is one build, so there is one environment, and this constant IS that decision. The
+ * extension has no build step (see the README) — nothing injects a value at package time — so
+ * pointing a copy somewhere else is `resolveEndpoint` below, not a flag.
+ *
+ * If you fork this, replace it with your own deployment's functions base. See MAINTAINING.md §5:
+ * it is the one item in the rebrand inventory that is a decision rather than a find-and-replace.
+ */
 export const DEFAULT_FUNCTIONS_BASE = "https://us-central1-lumi-afb7d.cloudfunctions.net";
 
 /**
  * The endpoint this install should use.
  *
- * An override exists for one reason: this repo is open source and its own dev loop points at a
- * Firebase emulator. It is NOT a user-facing setting — a person who can be talked into changing
- * where their browser signs in has been phished, so it lives behind the same Advanced disclosure
- * as the self-hosted bridge and is never shown in the ordinary flow.
+ * THIS IS HOW ONE BUILD REACHES MORE THAN ONE BACKEND, and it is the whole environment story: a
+ * Firebase emulator on a contributor's laptop, a staging deployment, or a production one — each is
+ * this string, stored per install. There is no second build to publish and no flag to pass,
+ * because there is no build step to pass it to.
+ *
+ * It is NOT a user-facing setting. A person who can be talked into changing where their browser
+ * signs in has been phished, so it lives behind the same Advanced disclosure as the self-hosted
+ * bridge and is never shown in the ordinary flow. That is a deliberate trade: an operator moving
+ * their own install between environments types it once, and everybody else never sees it.
+ *
+ * ⚠️ Switching endpoints does NOT re-key storage. The session, browserId and ship list under
+ * `KEYS` are shared across whatever this points at, so a browser moved between backends carries a
+ * session the new one will reject — sign out first, or expect one confusing failure.
  */
 export function resolveEndpoint(stored) {
   const raw = typeof stored === "string" ? stored.trim() : "";

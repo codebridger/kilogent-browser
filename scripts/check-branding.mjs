@@ -99,6 +99,11 @@ const MUST_CONTAIN = [
 
   // The endpoint. A fork with our branding pointing at nothing is worse than an unbranded build,
   // because it looks installed and working.
+  //
+  // ⚠️ THIS PINS THE STRING, so repointing the extension at another deployment fails HERE until
+  // this line is updated too. That is the intent, not friction: the endpoint is the one compiled
+  // decision in the whole extension (see the constant's docblock) and it is invisible from the UI,
+  // so a silent change to it is a build that looks fine and signs people into somewhere else.
   [
     'packages/extension/src/providers/kilogent/config.js',
     'the backend endpoint',
