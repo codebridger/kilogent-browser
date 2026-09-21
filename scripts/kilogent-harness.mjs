@@ -22,7 +22,9 @@
 // Asserts: the v2 hello is accepted; a dispatch reaches the Executor and the result comes back;
 // an expired ticket is retried rather than backed off; the two-level blocklist refuses at the
 // extension even when the relay was happy to forward; a session close tears down that session's
-// tabs and nobody else's.
+// tabs and nobody else's; and every call to Crew goes through its `crewBrowsers` dispatcher in the
+// `{data: {op, data}}` envelope, against a stand-in that 404s anything else the way production does.
+import { createServer } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { WebSocket as WsWebSocket } from "ws";
 // The relay's BUILD OUTPUT, not its source: `packages/relay` is TypeScript and this harness is
@@ -33,6 +35,12 @@ import { resolveAuthProvider } from "../packages/relay/dist/providers/index.js";
 import { Executor } from "../packages/extension/src/executor.js";
 import { KilogentConnection } from "../packages/extension/src/providers/kilogent/connection.js";
 import { effectiveBlocklist, isBlocked } from "../packages/extension/src/providers/kilogent/blocklist.js";
+import { callFunction, startLogin } from "../packages/extension/src/providers/kilogent/auth.js";
+import {
+  listMyShips,
+  // Renamed on import: `main()` has its own `mintTicket`, the relay-side stand-in used above.
+  mintTicket as mintTicketFromCrew,
+} from "../packages/extension/src/providers/kilogent/api.js";
 
 // connection code reads WebSocket.OPEN/CONNECTING off the global; point it at `ws` in Node.
 globalThis.WebSocket = WsWebSocket;
@@ -547,6 +555,120 @@ async function main() {
     missing.body?.outcome === "browser_not_here",
     "dispatching to a browser the relay is not holding says so, rather than hanging",
   );
+
+  // ── 7. the callable envelope — the break that took every browser down on 2026-08-28 ─────────
+  // Crew folded its six browser callables into ONE dispatcher, `crewBrowsers({op, data})`, and this
+  // provider went on posting to the six old URLs. Every one 404'd, while the Firestore heartbeat —
+  // which needs no callable — kept the browser looking `ready`. Everything above stands in for
+  // Crew's mint with the relay's own code, so none of it could see that.
+  //
+  // THE STAND-IN ANSWERS THE WAY PRODUCTION DOES, OR IT PROVES NOTHING. Any path but the dispatcher
+  // gets a bare 404 page — what Cloud Functions returns for a function that is not deployed — and an
+  // operation the dispatcher does not have gets its own `NOT_FOUND "Unknown operation: …"`. A stub
+  // that echoed back whatever it was sent is how an earlier wire-format bug passed both sides' tests.
+  console.log("-- the callable envelope --");
+  const calls = [];
+  const CANNED = {
+    startBrowserLogin: {
+      userCode: "ABCD1234",
+      displayCode: "ABCD-1234",
+      deviceCode: "device_code",
+      verificationUrl: "https://app.test/connect-browser?code=ABCD1234",
+      expiresIn: 600,
+      interval: 5,
+    },
+    pollBrowserLogin: { status: "pending" },
+    listMyShipsForBrowser: { ships: [{ shipId: "ship_a", name: "A" }] },
+    mintBrowserRelayTicket: { ticket: "ticket_x", relayUrl: "wss://relay.test/ws", expiresInMs: 600_000 },
+  };
+  const crew = createServer((req, res) => {
+    let raw = "";
+    req.on("data", (chunk) => (raw += chunk));
+    req.on("end", () => {
+      let body = null;
+      try {
+        body = JSON.parse(raw);
+      } catch {
+        /* recorded as null; the assertions below say what was expected */
+      }
+      calls.push({ path: req.url, body, authorization: req.headers.authorization ?? null });
+      if (req.method !== "POST" || req.url !== "/crewBrowsers") {
+        res.writeHead(404, { "content-type": "text/html" });
+        res.end("<html><head><title>404 Page not found</title></head><body>Not Found</body></html>");
+        return;
+      }
+      const op = body?.data?.op;
+      if (typeof op !== "string" || !Object.hasOwn(CANNED, op)) {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { message: `Unknown operation: ${op}`, status: "NOT_FOUND" } }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ result: CANNED[op] }));
+    });
+  });
+  await new Promise((resolve) => crew.listen(0, "127.0.0.1", resolve));
+  const crewBase = `http://127.0.0.1:${crew.address().port}`;
+  const lastCall = () => calls[calls.length - 1];
+  /** The last request went to the dispatcher, naming `op`, with exactly `data` nested under it. */
+  const sent = (op, data) => {
+    const c = lastCall();
+    return (
+      c?.path === "/crewBrowsers" &&
+      c.body?.data?.op === op &&
+      JSON.stringify(c.body.data.data) === JSON.stringify(data)
+    );
+  };
+
+  const old = await fetch(`${crewBase}/startBrowserLogin`, { method: "POST", body: "{}" });
+  ok(old.status === 404, "the stand-in 404s the old per-callable URL, exactly as production does");
+
+  const started = await startLogin(crewBase, "Harness Chrome");
+  ok(
+    started?.userCode === "ABCD1234" && sent("startBrowserLogin", { label: "Harness Chrome" }),
+    "sign-in starts through the dispatcher, the label nested under data",
+  );
+  ok(lastCall()?.authorization === null, "and carries no bearer — there is no session yet");
+
+  const polled = await callFunction(crewBase, "pollBrowserLogin", {
+    userCode: "ABCD1234",
+    deviceCode: "device_code",
+  });
+  ok(
+    polled?.status === "pending" &&
+      sent("pollBrowserLogin", { userCode: "ABCD1234", deviceCode: "device_code" }),
+    "the worker's poll goes through the dispatcher too",
+  );
+
+  const ships = await listMyShips(callFunction, crewBase, "id_token_1");
+  ok(
+    ships.length === 1 &&
+      sent("listMyShipsForBrowser", {}) &&
+      lastCall()?.authorization === "Bearer id_token_1",
+    "the workspace list is an authenticated dispatcher call",
+  );
+
+  const minted = await mintTicketFromCrew(callFunction, crewBase, "id_token_1", "brw_x");
+  ok(
+    minted?.relayUrl === "wss://relay.test/ws" && sent("mintBrowserRelayTicket", { browserId: "brw_x" }),
+    "the ticket is minted through the dispatcher — the call whose 404 kept every socket closed",
+  );
+
+  let refusal = null;
+  try {
+    await callFunction(crewBase, "noSuchOperation", {});
+  } catch (e) {
+    refusal = e;
+  }
+  ok(
+    refusal?.status === "NOT_FOUND" && /Unknown operation: noSuchOperation/.test(refusal?.message ?? ""),
+    "an operation Crew does not have surfaces Crew's own words, not a bare HTTP status",
+  );
+  ok(
+    calls.length > 1 && calls.slice(1).every((c) => c.path === "/crewBrowsers"),
+    "apart from the stand-in's own probe, nothing was sent to any other URL",
+  );
+  await new Promise((resolve) => crew.close(resolve));
 
   conn.teardown();
   await relay.close(200);

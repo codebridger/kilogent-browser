@@ -21,22 +21,43 @@ import { KEYS, resolveEndpoint } from "./config.js";
 const REFRESH_SKEW_MS = 5 * 60 * 1000;
 
 /**
- * Call a Crew callable over its HTTP shape.
+ * The ONE deployed function every call in this provider goes through.
  *
- * Callables wrap the payload in `{data}` and answer `{result}` or `{error}`, and the error carries
- * a `status` string (`UNAUTHENTICATED`, `NOT_FOUND`, …). Surfacing that status matters more here
- * than the message: `pollBrowserLogin` answers `NOT_FOUND` for a handshake that expired, was
- * claimed, or never existed, and the caller has to tell that apart from a network blip — one means
- * start again, the other means try again.
+ * Crew serves the browser's operations from a single dispatcher and picks the operation from the
+ * body. They were six separately deployed callables until Crew folded them on 2026-08-28 — every
+ * deployed function costs a full vCPU per instance against the project's Cloud Run quota. This
+ * file kept posting to the six old URLs, and each one answered 404. Nothing looked broken: the
+ * heartbeat is plain Firestore and kept beating, so Crew showed the browser `ready` while no
+ * ticket could ever be minted and a fresh install could not even sign in.
+ *
+ * The operation NAMES are the contract, and they did not change. Crew's `check:callable-clients`
+ * pins the four this provider sends, so renaming or moving one fails Crew's CI rather than every
+ * browser that has this installed.
  */
-export async function callFunction(endpoint, name, data, idToken) {
-  const res = await fetch(`${resolveEndpoint(endpoint)}/${name}`, {
+const DISPATCHER = "crewBrowsers";
+
+/**
+ * Call one of Crew's browser operations over the callable HTTP shape.
+ *
+ * The envelope is `{data: {op, data}}` — nested rather than flattened, so `op` can never collide
+ * with a field of some operation's own payload. The answer is `{result}` or `{error}`, and the
+ * error carries a `status` string (`UNAUTHENTICATED`, `NOT_FOUND`, …). Surfacing that status
+ * matters more here than the message: `pollBrowserLogin` answers `NOT_FOUND` for a handshake that
+ * expired, was claimed, or never existed, and the caller has to tell that apart from a network
+ * blip — one means start again, the other means try again.
+ *
+ * ⚠️ The dispatcher answers an operation it does not have with `NOT_FOUND` too ("Unknown operation:
+ * …"), so a renamed operation would read to `pollBrowserLogin`'s caller as an expired handshake.
+ * That is why the guard lives in Crew, where the rename would happen.
+ */
+export async function callFunction(endpoint, op, data, idToken) {
+  const res = await fetch(`${resolveEndpoint(endpoint)}/${DISPATCHER}`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
       ...(idToken ? { authorization: `Bearer ${idToken}` } : {}),
     },
-    body: JSON.stringify({ data: data ?? {} }),
+    body: JSON.stringify({ data: { op, data: data ?? {} } }),
   });
   let body = null;
   try {
@@ -45,7 +66,7 @@ export async function callFunction(endpoint, name, data, idToken) {
     /* a non-JSON body is a proxy or an outage; handled below as a status-less failure */
   }
   if (!res.ok || body?.error) {
-    const err = new Error(body?.error?.message || `${name} failed (HTTP ${res.status})`);
+    const err = new Error(body?.error?.message || `${op} failed (HTTP ${res.status})`);
     err.status = body?.error?.status || "";
     err.httpStatus = res.status;
     throw err;
