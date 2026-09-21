@@ -1,4 +1,5 @@
-// Talking to Kilogent Crew: two callables, and the browser's own row in Firestore.
+// Talking to Kilogent Crew: two operations of its browser dispatcher (see `callFunction` in
+// auth.js), and the browser's own row in Firestore.
 //
 // The row is written DIRECTLY by this extension rather than by a callable, and that is the whole
 // security model rather than a shortcut: `firestore.rules` pins `ownerUid` to `request.auth.uid`,
