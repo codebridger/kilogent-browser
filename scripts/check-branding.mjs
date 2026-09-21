@@ -109,6 +109,22 @@ const MUST_CONTAIN = [
     'the backend endpoint',
     'us-central1-lumi-afb7d.cloudfunctions.net',
   ],
+
+  // THE TWO PUBLISHED BUILDS (since 2026-09-21), declared in package.json's `extensionVariants` and
+  // stamped into each build's `src/build-env.js` by the release. Same reasoning as the endpoint
+  // above, twice over: each build's endpoint is invisible from its UI, and the dev build's NAME is
+  // the only thing in chrome://extensions that tells the two apart when both are installed.
+  [
+    'package.json',
+    'the dev build points at the development project',
+    '"functionsBase": "https://us-central1-lumi-afb7d.cloudfunctions.net"',
+  ],
+  [
+    'package.json',
+    'the prod build points at production (europe-west1)',
+    '"functionsBase": "https://europe-west1-kilogent-crew-prod.cloudfunctions.net"',
+  ],
+  ['package.json', 'the dev build is named as one', '"name": "Kilogent Browser (Dev)"'],
 ];
 
 let failed = 0;

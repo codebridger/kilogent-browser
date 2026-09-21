@@ -70,7 +70,7 @@ optional extra.
 | `scripts/popup-test.mjs` | **rarely** | upstream's file with OUR panel's tests appended at the end |
 | `scripts/resolve-versions.mjs`, `scripts/release-notes.mjs`, `.github/workflows/release.yml` | **never** | byte-identical to upstream — what this repo releases is *declared*, not coded (§2) |
 | `.github/workflows/ci.yml` | **rarely** | upstream's file plus ONE extra step, the Kilogent harness |
-| `package.json` | **always, trivially** | `name` and `releasePackages` are ours, every script is upstream's |
+| `package.json` | **always, trivially** | `name`, `releasePackages` and `extensionVariants` are ours, every script is upstream's |
 | `packages/relay/**` | **never** | upstream's, unedited — we build and test it, we do not publish it (§2) |
 
 `sw.js` AND `popup.js` used to conflict on every single merge, because the transport and the
@@ -167,11 +167,31 @@ point. What follows is the full inventory of what a rebrand touches.
 | 3 | `packages/extension/popup.html` | the heading, the sub-heading and the stylesheet |
 | 3b | `providers/<yourbrand>/popup.js` | every visible string in your panel |
 | 4 | `providers/<yourbrand>/config.js` → `KEYS` | the `chrome.storage` keys |
-| 5 | `providers/<yourbrand>/config.js` → `DEFAULT_FUNCTIONS_BASE` | **your own endpoint** — this one is not cosmetic |
-| 6 | `package.json` | `name`, and `releasePackages` — see §2 before you touch it |
+| 5 | `package.json` → `extensionVariants`, and `providers/<yourbrand>/config.js` → `DEV_FUNCTIONS_BASE` | **your own endpoints**, one per build — this one is not cosmetic. See "Two builds" below |
+| 6 | `package.json` | `name`, `releasePackages` — see §2 before you touch it — and each build's `manifest.name` under `extensionVariants` |
 | 7 | `scripts/<yourbrand>-harness.mjs` | the harness and its npm script |
 
 A case-preserving find-and-replace covers 1–4, 6 and 7. Number 5 is a real decision, not a rename.
+
+### Two builds: development and production
+
+This fork ships **two builds from one tree**, declared under `extensionVariants` in `package.json`,
+which upstream's release reads (see its README → "Release variants"):
+
+| Build | Name in Chrome | Signs in to | Zip |
+|---|---|---|---|
+| `dev` | Kilogent Browser (Dev) | the development project, `lumi-afb7d` (us-central1) | `extension-<version>-dev.zip` |
+| `prod` | Kilogent Browser | production, `kilogent-crew-prod` (europe-west1) | `extension-<version>-prod.zip` |
+
+The release writes each build's `env` into its own copy of `src/build-env.js`. The committed file is
+empty, so **a checkout loaded unpacked talks to development**, and the popup says "Dev build" out
+loud. Each environment also has its own relay, and the backend hands every build the right one with
+its ticket, so nothing here names a relay.
+
+The two install side by side. Chrome gives each unpacked folder its own id and its own storage, so
+a session on one is invisible to the other. **Keep each build in the same folder across updates**
+(replace the contents in place). A new folder is a new id, which means a new browser that Kilogent
+has never been told to share.
 
 ### Three traps
 

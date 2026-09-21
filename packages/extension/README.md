@@ -5,10 +5,28 @@ They never see a password, and they never see a tab you opened.
 
 There is **no build step**. The directory you are reading is the extension — load it as-is.
 
+## Two builds: development and production
+
+Each GitHub Release carries two zips. They are the same code pointed at two Kilogent environments:
+
+| Zip | Name in Chrome | Signs in to |
+|---|---|---|
+| `extension-<version>-prod.zip` | Kilogent Browser | Kilogent (production) |
+| `extension-<version>-dev.zip` | Kilogent Browser (Dev) | Kilogent's development environment |
+
+They install side by side. **Unzip each into a folder you keep**, and on update replace that
+folder's contents in place. Chrome identifies an unpacked extension by its folder, so a new folder
+is a new browser as far as Kilogent is concerned, and it will not be shared with anyone until you
+share it again.
+
+Loading **this directory** from a checkout gives you the development build. The popup says "Dev
+build" at the top whenever the build is not production.
+
 ## Install it locally
 
 1. `chrome://extensions` → turn on **Developer mode**.
-2. **Load unpacked** → choose this directory (`packages/extension`).
+2. **Load unpacked** → choose the folder you unzipped a build into, or this directory
+   (`packages/extension`) for the development build.
 3. Click the extension → **Sign in with Kilogent**. A tab opens on your Kilogent workspace, at
    `/connect-browser`, with the code pre-filled; approve it there. The host is not written down
    anywhere in the extension — the backend supplies the whole URL, so it follows the workspace

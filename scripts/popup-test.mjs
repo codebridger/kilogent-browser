@@ -326,6 +326,39 @@ await check("the shell's real mount loop is the one this file models", async () 
   assert.match(src, /try \{\s*panel\.render\([\s\S]{0,40}\} catch/, "render is no longer isolated");
 });
 
+// ── THIS FORK'S PANEL (appended, so a merge from upstream stays clean) ─────────────────────────
+const { createKilogentPanel } = await import("../packages/extension/src/providers/kilogent/popup.js");
+
+await check("a development build says so where you sign in; production says nothing", async () => {
+  // The two builds install side by side and look identical in the popup otherwise — signing a
+  // browser into the wrong Kilogent is invisible until an agent cannot find it.
+  for (const [label, shown] of [["Dev", true], [null, false]]) {
+    const window = popupWindow();
+    const section = window.document.createElement("section");
+    window.document.body.appendChild(section);
+    const panel = createKilogentPanel({
+      storage: fakeStorage(),
+      send: recorder().send,
+      openTab: () => {},
+      buildLabel: label,
+    });
+    panel.mount(section);
+    const tag = section.querySelector("#buildLabel");
+    assert.equal(Boolean(tag), shown, `label ${JSON.stringify(label)}: tag shown should be ${shown}`);
+    if (shown) {
+      assert.match(tag.textContent, /^Dev build — .*not production\.$/);
+      assert.equal(section.firstElementChild, tag, "the label is the first thing in the panel");
+    }
+  }
+});
+
+await check("a checkout is labelled Dev — it talks to the development project", async () => {
+  // The committed build-env.js is empty, so this is what "Load unpacked" on the repo gets.
+  const config = await import("../packages/extension/src/providers/kilogent/config.js");
+  assert.equal(config.DEFAULT_FUNCTIONS_BASE, config.DEV_FUNCTIONS_BASE);
+  assert.equal(config.BUILD_LABEL, "Dev");
+});
+
 if (failures.length) {
   console.error(`\n✗ popup: ${failures.length} failed, ${pass} passed.`);
   for (const f of failures) console.error(`    ${f}`);
