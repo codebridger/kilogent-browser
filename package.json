@@ -3,6 +3,27 @@
   "releasePackages": [
     "extension"
   ],
+  "extensionVariants": [
+    {
+      "id": "dev",
+      "manifest": {
+        "name": "Kilogent Browser (Dev)",
+        "action": {
+          "default_title": "Kilogent Browser (Dev)"
+        }
+      },
+      "env": {
+        "functionsBase": "https://us-central1-lumi-afb7d.cloudfunctions.net",
+        "label": "Dev"
+      }
+    },
+    {
+      "id": "prod",
+      "env": {
+        "functionsBase": "https://europe-west1-kilogent-crew-prod.cloudfunctions.net"
+      }
+    }
+  ],
   "version": "0.1.0",
   "private": true,
   "license": "Apache-2.0",

@@ -10,30 +10,54 @@
 // refuses every call that is not signed in, and the only unauthenticated ones are the two halves
 // of a device handshake that is worthless until a human approves it.
 
+import { BUILD_ENV } from "../../build-env.js";
+
+/** The DEVELOPMENT project's functions — what a checkout talks to, and the "dev" build's stamp. */
+export const DEV_FUNCTIONS_BASE = "https://us-central1-lumi-afb7d.cloudfunctions.net";
+
 /**
- * The one environment this build is wired to.
+ * The environment this build is wired to.
  *
- * ⚠️ THIS IS THE DEVELOPMENT PROJECT, not production, and the difference is invisible from inside
- * the extension — every screen looks identical whichever backend answers. It said "Production"
- * here for months while naming a dev project id, which is the kind of comment that survives
- * precisely because nobody can contradict it by using the software.
+ * TWO BUILDS SHIP FROM THIS TREE (since 2026-09-21), declared under `extensionVariants` in the
+ * root package.json: "Kilogent Browser (Dev)" talks to the development project, "Kilogent Browser"
+ * to production (europe-west1). The release stamps each build's `functionsBase` into
+ * `src/build-env.js`. A CHECKOUT carries no stamp, so loading this directory unpacked talks to
+ * DEVELOPMENT — never to production, which is the direction a mistake should fall.
  *
- * There is one build, so there is one environment, and this constant IS that decision. The
- * extension has no build step (see the README) — nothing injects a value at package time — so
- * pointing a copy somewhere else is `resolveEndpoint` below, not a flag.
+ * ⚠️ The difference is invisible from inside the extension — every screen looks identical whichever
+ * backend answers. This constant once said "Production" for months while naming a dev project id,
+ * which is the kind of comment that survives precisely because nobody can contradict it by using
+ * the software. So the popup names a non-production build out loud (`BUILD_LABEL`), and
+ * `check-branding.mjs` pins every endpoint so a repoint fails there first.
  *
- * If you fork this, replace it with your own deployment's functions base. See MAINTAINING.md §5:
- * it is the one item in the rebrand inventory that is a decision rather than a find-and-replace.
+ * If you fork this, replace both endpoints with your own deployment's — in package.json's
+ * `extensionVariants` and in `DEV_FUNCTIONS_BASE` above. See MAINTAINING.md §3, item 5: it is the one
+ * item in the rebrand inventory that is a decision rather than a find-and-replace.
  */
-export const DEFAULT_FUNCTIONS_BASE = "https://us-central1-lumi-afb7d.cloudfunctions.net";
+export const DEFAULT_FUNCTIONS_BASE =
+  typeof BUILD_ENV.functionsBase === "string" && BUILD_ENV.functionsBase
+    ? BUILD_ENV.functionsBase
+    : DEV_FUNCTIONS_BASE;
+
+/**
+ * What the popup calls this build — "Dev" — or null for production.
+ *
+ * A stamped build says so itself (`env.label`); a stamped build that names no label is production.
+ * A checkout is DEVELOPMENT (see above), so it says "Dev" too.
+ */
+export const BUILD_LABEL =
+  typeof BUILD_ENV.label === "string"
+    ? BUILD_ENV.label || null
+    : BUILD_ENV.functionsBase
+      ? null
+      : "Dev";
 
 /**
  * The endpoint this install should use.
  *
- * THIS IS HOW ONE BUILD REACHES MORE THAN ONE BACKEND, and it is the whole environment story: a
- * Firebase emulator on a contributor's laptop, a staging deployment, or a production one — each is
- * this string, stored per install. There is no second build to publish and no flag to pass,
- * because there is no build step to pass it to.
+ * AN ESCAPE HATCH, NOT THE ENVIRONMENT STORY. The two published builds are how a person chooses
+ * development or production; this per-install string is for everything else — a Firebase emulator
+ * on a contributor's laptop, a staging deployment — without publishing a third build.
  *
  * It is NOT a user-facing setting. A person who can be talked into changing where their browser
  * signs in has been phished, so it lives behind the same Advanced disclosure as the self-hosted

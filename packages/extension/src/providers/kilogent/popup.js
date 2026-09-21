@@ -17,7 +17,7 @@
 // The markup below is VERBATIM from what `popup.html` used to hold — the stylesheet is core and
 // matches on these class names, so this is a move rather than a rewrite.
 
-import { KEYS, resolveEndpoint } from "./config.js";
+import { BUILD_LABEL, KEYS, resolveEndpoint } from "./config.js";
 import { callFunction, startLogin } from "./auth.js";
 import { listMyShips } from "./api.js";
 import { parseOwnEntry } from "./blocklist.js";
@@ -254,6 +254,19 @@ export function createKilogentPanel(deps) {
     mount(root) {
       el = root;
       el.innerHTML = MARKUP;
+
+      // WHICH KILOGENT THIS BUILD SIGNS IN TO, said on the screen where the person signs in. The
+      // development and production builds install side by side and are otherwise identical here,
+      // and signing a browser into the wrong one is invisible until an agent cannot find it.
+      // `deps.buildLabel` exists for the test; the extension always uses the build's own label.
+      const label = deps.buildLabel !== undefined ? deps.buildLabel : BUILD_LABEL;
+      if (label) {
+        const tag = el.ownerDocument.createElement("p");
+        tag.className = "note";
+        tag.id = "buildLabel";
+        tag.textContent = `${label} build — signs in to Kilogent's ${label.toLowerCase()} environment, not production.`;
+        el.prepend(tag);
+      }
 
       $("signIn").addEventListener("click", () => void beginSignIn());
       $("cancelSignIn").addEventListener("click", async () => {
