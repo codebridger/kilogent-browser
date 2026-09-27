@@ -1,0 +1,35 @@
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="base.css"><style>
+.frame{position:absolute;inset:24px;padding:52px 64px}
+.head{display:flex;justify-content:space-between;align-items:center}
+h1{font-size:52px;margin:30px 0 12px}
+p.lead{font-size:20px;margin:0 0 34px;line-height:1.5;max-width:900px}
+.locks{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+.card{border:1px solid #ffffff1c;border-radius:18px;padding:24px;background:#ffffff08}
+.card .k{display:flex;align-items:center;gap:10px;font-size:22px;font-weight:700;margin-bottom:10px}
+.card .k i{font-style:normal;width:34px;height:34px;border-radius:9px;background:#fff;color:#100e18;display:grid;place-items:center;font-size:17px}
+.card p{margin:0;font-size:16.5px;line-height:1.5;color:#b9b5cc}
+.card .who{margin-top:14px;font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:#8f89ab;font-weight:600}
+.row{display:grid;grid-template-columns:1.1fr 1fr;gap:20px;margin-top:20px}
+ul{margin:0;padding:0;list-style:none;display:grid;gap:10px}
+ul li{font-size:16.5px;color:#d9d6e6;display:flex;gap:10px} ul li::before{content:"✕";color:#ff7a7a;font-weight:700}
+.bar{margin-top:6px;border-radius:10px;overflow:hidden;border:1px solid #ffffff1c}
+.bar .top{background:#e8eaed;color:#202124;font-size:14px;padding:10px 14px;display:flex;justify-content:space-between;font-family:system-ui}
+.bar .top b{color:#1a73e8;font-weight:500}
+.bar .page{height:62px;background:linear-gradient(90deg,#ffffff10,#ffffff05)}
+</style></head><body><div class="frame">
+<div class="head"><div class="brand"><svg class="logo" viewBox="0 0 64 64" fill="none"><rect width="64" height="64" rx="14" fill="#100e18"/><circle cx="21.5" cy="33" r="13.5" stroke="#fff" stroke-width="5"/><rect x="28" y="18" width="30" height="30" rx="10" fill="#fff"/><rect x="36.5" y="28.5" width="3.6" height="7" rx="1.8" fill="#100e18"/><rect x="45.9" y="28.5" width="3.6" height="7" rx="1.8" fill="#100e18"/></svg> Kilogent Browser</div><div class="eyebrow">You stay in control</div></div>
+<h1>Three locks. Every one of them yours to open.</h1>
+<p class="lead muted">An agent can drive this browser only when all three are open — and a workspace admin can never open the last two for you.</p>
+<div class="locks">
+<div class="card"><div class="k"><i>1</i>Grant</div><p>This agent may use browsers at all.</p><div class="who">Set by a workspace captain</div></div>
+<div class="card"><div class="k"><i>2</i>Share</div><p>Agents may use <em>this</em> browser.</p><div class="who">Set by you</div></div>
+<div class="card"><div class="k"><i>3</i>Permission</div><p>They may, right now, for as long as you say.</p><div class="who">Set by you</div></div>
+</div>
+<div class="row">
+<div class="card"><div class="k" style="font-size:19px">What it will never do</div><ul>
+<li>Read your passwords, cookies or saved sessions</li>
+<li>Touch a tab you opened — agents work in their own tab group</li>
+<li>Run its own scripts on a page, or download files</li><li>Open a site on your blocklist</li></ul></div>
+<div class="card"><div class="k" style="font-size:19px">Always visible</div><p>Chrome shows a banner on every tab an agent is driving. It can’t be hidden.</p>
+<div class="bar"><div class="top"><span>“Kilogent Browser” started debugging this browser</span><b>Cancel</b></div><div class="page"></div></div></div>
+</div></div></body></html>

@@ -1,0 +1,8 @@
+*{box-sizing:border-box} html,body{margin:0}
+body{background:#100e18;color:#fff;font-family:-apple-system,"SF Pro Display",system-ui,sans-serif;-webkit-font-smoothing:antialiased;overflow:hidden}
+.frame{position:relative;border:1px solid #ffffff14;border-radius:28px;background:radial-gradient(1200px 600px at 20% 0%,#1d1a2c 0%,#100e18 60%)}
+.brand{display:flex;align-items:center;gap:12px;font-weight:700;font-size:22px;letter-spacing:-.01em}
+.brand .logo{width:40px;height:40px;border:1px solid #ffffff22;border-radius:10px}
+h1{font-weight:700;letter-spacing:-.025em;margin:0;line-height:1.05}
+.muted{color:#b9b5cc}
+.eyebrow{font-size:14px;letter-spacing:.14em;text-transform:uppercase;color:#8f89ab;font-weight:600}

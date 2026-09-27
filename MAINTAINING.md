@@ -69,7 +69,8 @@ optional extra.
 | `popup.html` | **rarely** | the BODY is upstream's structure; the heading, **the sub-heading** and the stylesheet are ours. This row once said "only the heading", a merge believed it, and the popup shipped upstream's copy under our name — `npm run test:branding` is the guard that now catches it |
 | `scripts/popup-test.mjs` | **rarely** | upstream's file with OUR panel's tests appended at the end |
 | `scripts/resolve-versions.mjs`, `scripts/release-notes.mjs`, `.github/workflows/release.yml` | **never** | byte-identical to upstream — what this repo releases is *declared*, not coded (§2) |
-| `.github/workflows/ci.yml` | **rarely** | upstream's file plus ONE extra step, the Kilogent harness |
+| `.github/workflows/ci.yml` | **rarely** | upstream's file plus two extra steps, the Kilogent harness and the Web Store self-test |
+| `.github/workflows/webstore.yml`, `scripts/publish-webstore.mjs` | **never** | upstream does not have them (§2, "The Chrome Web Store") |
 | `package.json` | **always, trivially** | `name`, `releasePackages` and `extensionVariants` are ours, every script is upstream's |
 | `packages/relay/**` | **never** | upstream's, unedited — we build and test it, we do not publish it (§2) |
 
@@ -152,6 +153,58 @@ Two smaller notes:
   says `⚠️ did not publish`.
 - **The extension's version comes from `extension-v*` git tags**, written by the release job only
   after the release succeeds. Never move them by hand.
+
+### The Chrome Web Store
+
+After a release on `main`, [`webstore.yml`](.github/workflows/webstore.yml) uploads that release's
+**prod** zip to the Chrome Web Store and submits it for review, through the
+[v2 API](https://developer.chrome.com/docs/webstore/api). It is a separate file because
+`release.yml` is upstream's; it runs on Release's `workflow_run`, so it publishes the exact bytes
+attached to the GitHub Release rather than a rebuild.
+
+It only acts when that release **moved the extension's version** (an `extension-v*` tag on the
+commit). Publishing twice is a no-op: the script asks the store what it has first, and skips a
+version that is not newer. If an older version is still in review, the store refuses the upload —
+the run fails and says so; wait for the review or cancel it in the dashboard, then re-run.
+
+**Until it is configured, it skips itself with a notice.** Setting it up, once:
+
+1. **The first upload is by hand.** The API updates an item; it cannot create one. Upload a prod zip
+   in the [Developer Dashboard](https://chrome.google.com/webstore/devconsole) under the codebridger
+   publisher, and fill in the store listing and privacy tabs. Note the **item id** and, under
+   Account, the **publisher id**.
+2. **Google Cloud** — done in `kilogent-crew-prod`: the *Chrome Web Store API* is enabled, and the
+   service account is `chrome-webstore-publisher@kilogent-crew-prod.iam.gserviceaccount.com`.
+3. **Add that service account's email in the Developer Dashboard → Account.** A publisher can have
+   only one.
+4. **Let GitHub act as it, without a key** — Workload Identity Federation. `kilogent-crew-prod`
+   already has a pool for the codebridger org (`github-pool`, provider `github`, condition
+   `repository_owner == 'codebridger'`), so this is one binding that narrows it to THIS repo:
+
+   ```bash
+   gcloud iam service-accounts add-iam-policy-binding \
+     chrome-webstore-publisher@kilogent-crew-prod.iam.gserviceaccount.com --project=kilogent-crew-prod \
+     --role=roles/iam.workloadIdentityUser \
+     --member="principalSet://iam.googleapis.com/projects/726107194881/locations/global/workloadIdentityPools/github-pool/attribute.repository/codebridger/kilogent-browser"
+   ```
+
+   The service account has **no roles on the project**. What it may do is decided entirely by the
+   Developer Dashboard, which lists it as the publisher's API account.
+5. **The repository variables** (none are secret):
+
+   ```bash
+   gh variable set WEBSTORE_PUBLISHER_ID    --body '<publisher id>'
+   gh variable set WEBSTORE_ITEM_ID         --body '<item id>'
+   gh variable set WEBSTORE_SERVICE_ACCOUNT --body 'chrome-webstore-publisher@kilogent-crew-prod.iam.gserviceaccount.com'
+   gh variable set WEBSTORE_WIF_PROVIDER    --body 'projects/726107194881/locations/global/workloadIdentityPools/github-pool/providers/github'
+   ```
+
+   Optional: `WEBSTORE_PUBLISH_TYPE=STAGED_PUBLISH` holds an approved version until somebody presses
+   Publish in the dashboard; `WEBSTORE_VARIANT` picks another build than `prod`. The job runs in the
+   `chrome-web-store` environment, so a required reviewer can gate it from Settings → Environments.
+
+Then **Actions → Chrome Web Store → Run workflow** with the latest release's tag, to prove it end to
+end. The same button republishes any release later.
 
 ## 3. Making your own brand
 
