@@ -182,7 +182,7 @@ async function selfTest() {
 
   assert.equal(compareVersions('1.2', '1.2.0'), 0);
   assert.ok(compareVersions('0.10.0', '0.9.9') > 0, 'numeric, not lexical');
-  assert.ok(compareVersions('1.0.0.1', '1.0.0') > 0);
+  assert.ok(compareVersions('1.0.0.1000', '1.0.0') > 0);
   assert.throws(() => parseVersion('1.2.3-dev.4'), /not a Chrome extension version/);
   assert.throws(() => parseVersion('1.2.3.4.5'));
 
