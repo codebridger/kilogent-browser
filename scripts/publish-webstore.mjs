@@ -170,10 +170,14 @@ async function publish(zipPath) {
 
   const res = await call(token, 'POST', `${API}/v2/${name}:publish`, JSON.stringify({ publishType }));
   if (res.warningInfo) console.log(`warnings:\n${JSON.stringify(res.warningInfo, null, 2)}`);
-  if (!ACCEPTED_STATES.includes(res.state)) {
-    throw new Error(`publish answered state ${res.state}.\n${JSON.stringify(res, null, 2)}`);
+  // THE DOCUMENTED `state` IS NOT ALWAYS THERE. The first real submission answered 200 with only
+  // name, itemId and a warning — and was in review. So an answer without one is confirmed against
+  // the store's own status rather than read as a failure, which it once was.
+  const submitted = res.state ?? (await fetchStatus()).submittedItemRevisionStatus?.state;
+  if (!ACCEPTED_STATES.includes(submitted)) {
+    throw new Error(`publish answered state ${submitted}.\n${JSON.stringify(res, null, 2)}`);
   }
-  summary(`✅ Chrome Web Store: ${version} submitted (${publishType}) — now ${res.state}.`);
+  summary(`✅ Chrome Web Store: ${version} submitted (${publishType}) — now ${submitted}.`);
 }
 
 async function selfTest() {
