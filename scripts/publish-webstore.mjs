@@ -129,7 +129,9 @@ async function call(token, method, url, body, contentType = 'application/json') 
   if (!res.ok) {
     // The API's own message is the useful part — "item not found", "publisher mismatch", the
     // manifest problem. Print it whole rather than a status code that names nothing.
-    throw new Error(`${method} ${url} → HTTP ${res.status}\n${JSON.stringify(json.error ?? json, null, 2)}`);
+    const err = new Error(`${method} ${url} → HTTP ${res.status}\n${JSON.stringify(json.error ?? json, null, 2)}`);
+    err.reason = (json.error?.details ?? []).find((d) => d.reason)?.reason;
+    throw err;
   }
   return json;
 }
@@ -147,6 +149,10 @@ async function publish(zipPath) {
 
   const fetchStatus = () => call(token, 'GET', `${API}/v2/${name}:fetchStatus`);
   const status = await fetchStatus();
+  // Printed whole (minus the public key) because the documented shape and the real one have already
+  // disagreed once; the next surprise should be readable from the run log, not guessed at.
+  const { publicKey: _publicKey, ...shown } = status;
+  console.log(`store status:\n${JSON.stringify(shown, null, 2)}`);
   const next = decide(status, version);
   if (next.action === 'skip') {
     summary(`⏭️ Chrome Web Store: nothing to do — ${next.reason}`);
@@ -154,7 +160,18 @@ async function publish(zipPath) {
   }
   if (next.action === 'blocked') throw new Error(next.reason);
 
-  let up = await call(token, 'POST', `${API}/upload/v2/${name}:upload`, fs.readFileSync(zipPath), 'application/zip');
+  // A submission in review cannot be seen coming: for an item under its FIRST review, fetchStatus
+  // answers with nothing but its name and id. The upload is where the store says so.
+  let up;
+  try {
+    up = await call(token, 'POST', `${API}/upload/v2/${name}:upload`, fs.readFileSync(zipPath), 'application/zip');
+  } catch (err) {
+    if (err.reason !== 'NOT_UPDATEABLE') throw err;
+    throw new Error(
+      `a submission is still in review, and the store refuses any upload until it is decided. ${version} was ` +
+        'not uploaded. Re-run this workflow for this release once the review is done, or cancel it in the dashboard.',
+    );
+  }
   let state = up.uploadState;
   for (let i = 0; state === 'IN_PROGRESS' && i < POLL_LIMIT; i++) {
     await new Promise((r) => setTimeout(r, POLL_MS));
@@ -171,9 +188,9 @@ async function publish(zipPath) {
   const res = await call(token, 'POST', `${API}/v2/${name}:publish`, JSON.stringify({ publishType }));
   if (res.warningInfo) console.log(`warnings:\n${JSON.stringify(res.warningInfo, null, 2)}`);
   // THE DOCUMENTED `state` IS NOT ALWAYS THERE. The first real submission answered 200 with only
-  // name, itemId and a warning — and was in review. So an answer without one is confirmed against
-  // the store's own status rather than read as a failure, which it once was.
-  const submitted = res.state ?? (await fetchStatus()).submittedItemRevisionStatus?.state;
+  // name, itemId and a warning — and was in review, while fetchStatus showed no revision at all. A
+  // 200 from publish IS the store accepting the submission; only a state it names can contradict it.
+  const submitted = res.state ?? 'PENDING_REVIEW';
   if (!ACCEPTED_STATES.includes(submitted)) {
     throw new Error(`publish answered state ${submitted}.\n${JSON.stringify(res, null, 2)}`);
   }
