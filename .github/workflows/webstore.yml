@@ -1,0 +1,121 @@
+name: Chrome Web Store
+
+# THIS FORK'S OWN FILE. Publishes the PRODUCTION build to the Chrome Web Store after `release.yml`
+# has cut a GitHub Release. It is a separate file because `release.yml` is upstream's, byte for
+# byte (MAINTAINING.md §2) — editing it would conflict at every merge.
+#
+# WHAT IT PUBLISHES is the zip already attached to the release, not a rebuild: the store gets the
+# exact bytes people can download from GitHub. It only acts when the release moved the extension's
+# version (an `extension-v*` tag on that commit); a release that only re-attached an unchanged
+# extension has nothing new for the store, which refuses a version it already has anyway.
+#
+# CONFIGURATION — repository variables, none of them secret. Unset means the job is skipped with a
+# notice, so this file can land before the store is set up.
+#
+#   WEBSTORE_PUBLISHER_ID      Developer Dashboard → Account → Publisher ID
+#   WEBSTORE_ITEM_ID           the extension's id in the store
+#   WEBSTORE_WIF_PROVIDER      projects/<number>/locations/global/workloadIdentityPools/<pool>/providers/<provider>
+#   WEBSTORE_SERVICE_ACCOUNT   the service account added in Developer Dashboard → Account
+#   WEBSTORE_VARIANT           optional, which `extensionVariants` build to publish (default: prod)
+#   WEBSTORE_PUBLISH_TYPE      optional, DEFAULT_PUBLISH (default) or STAGED_PUBLISH
+#
+# NO KEY FILE. GitHub's OIDC token is exchanged for the service account's access token through
+# Workload Identity Federation, so there is no long-lived credential to leak or rotate.
+#
+# Re-run it for any release by hand: Actions → Chrome Web Store → Run workflow, with the tag.
+# Running twice is safe — see scripts/publish-webstore.mjs.
+
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish (e.g. v2026.09.27.41). Empty means the latest release.
+        required: false
+
+concurrency:
+  group: webstore
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    # An environment, so a required reviewer can be put in front of the store without editing this
+    # file: Settings → Environments → chrome-web-store.
+    environment: chrome-web-store
+    permissions:
+      contents: read
+      id-token: write # Workload Identity Federation
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Tags: which release this commit got, and whether it moved the extension's version.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+
+      - name: Find the release and its zip
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CONFIGURED: ${{ vars.WEBSTORE_PUBLISHER_ID != '' && vars.WEBSTORE_ITEM_ID != '' && vars.WEBSTORE_WIF_PROVIDER != '' && vars.WEBSTORE_SERVICE_ACCOUNT != '' }}
+          VARIANT: ${{ vars.WEBSTORE_VARIANT || 'prod' }}
+          INPUT_TAG: ${{ inputs.tag }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          if [ "$CONFIGURED" != "true" ]; then
+            echo "::notice::Chrome Web Store is not configured (see the top of webstore.yml) — skipping."
+            echo "go=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG="${INPUT_TAG:-$(gh release view --json tagName -q .tagName)}"
+          else
+            if [ -z "$(git tag --points-at "$SHA" --list 'extension-v*')" ]; then
+              echo "::notice::This release did not change the extension's version — nothing for the store."
+              echo "go=false" >> "$GITHUB_OUTPUT"; exit 0
+            fi
+            TAG=$(git tag --points-at "$SHA" --list 'v*' | sort -V | tail -1)
+            if [ -z "$TAG" ]; then
+              echo "::error::The extension was tagged at $SHA but no release tag points there."; exit 1
+            fi
+          fi
+
+          mkdir -p "$RUNNER_TEMP/zip"
+          gh release download "$TAG" --pattern "extension-*-${VARIANT}.zip" --dir "$RUNNER_TEMP/zip"
+          ZIPS=("$RUNNER_TEMP"/zip/*.zip)
+          if [ "${#ZIPS[@]}" -ne 1 ]; then
+            echo "::error::Expected one '$VARIANT' zip in $TAG, found ${#ZIPS[@]}."; exit 1
+          fi
+          echo "Publishing ${ZIPS[0]##*/} from $TAG"
+          echo "zip=${ZIPS[0]}" >> "$GITHUB_OUTPUT"
+          echo "go=true" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to Google
+        id: auth
+        if: steps.find.outputs.go == 'true'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WEBSTORE_WIF_PROVIDER }}
+          service_account: ${{ vars.WEBSTORE_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/chromewebstore
+
+      - name: Upload and submit for review
+        if: steps.find.outputs.go == 'true'
+        env:
+          WEBSTORE_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+          WEBSTORE_PUBLISHER_ID: ${{ vars.WEBSTORE_PUBLISHER_ID }}
+          WEBSTORE_ITEM_ID: ${{ vars.WEBSTORE_ITEM_ID }}
+          WEBSTORE_PUBLISH_TYPE: ${{ vars.WEBSTORE_PUBLISH_TYPE }}
+        run: node scripts/publish-webstore.mjs --zip "${{ steps.find.outputs.zip }}"

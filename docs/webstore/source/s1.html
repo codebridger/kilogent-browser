@@ -1,0 +1,22 @@
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="base.css"><style>
+.frame{position:absolute;inset:24px;display:grid;grid-template-columns:1fr 440px;gap:40px;padding:56px 56px 56px 64px}
+h1{font-size:54px;margin:28px 0 20px}
+p.lead{font-size:21px;line-height:1.5;margin:0 0 36px;max-width:560px}
+ol{list-style:none;padding:0;margin:0;display:grid;gap:18px;counter-reset:s}
+li{display:flex;gap:16px;align-items:flex-start;font-size:18px;line-height:1.45;counter-increment:s}
+li::before{content:counter(s);flex:none;width:32px;height:32px;border-radius:50%;background:#fff;color:#100e18;font-weight:700;display:grid;place-items:center;font-size:16px}
+li b{color:#fff} li span{color:#b9b5cc}
+.pop{align-self:center;justify-self:center;width:372px;height:690px;border-radius:14px;overflow:hidden;background:#fff;box-shadow:0 30px 80px #0009,0 0 0 1px #ffffff1f}
+.pop iframe{border:0;width:372px;height:700px}
+.tag{position:absolute;right:56px;top:56px;font-size:13px;color:#8f89ab}
+</style></head><body><div class="frame">
+<div><div class="brand"><svg class="logo" viewBox="0 0 64 64" fill="none"><rect width="64" height="64" rx="14" fill="#100e18"/><circle cx="21.5" cy="33" r="13.5" stroke="#fff" stroke-width="5"/><rect x="28" y="18" width="30" height="30" rx="10" fill="#fff"/><rect x="36.5" y="28.5" width="3.6" height="7" rx="1.8" fill="#100e18"/><rect x="45.9" y="28.5" width="3.6" height="7" rx="1.8" fill="#100e18"/></svg> Kilogent Browser</div>
+<h1>Your agents, in the sites<br>you’re already signed in to.</h1>
+<p class="lead muted">Lend this Chrome to your Kilogent workspace. Agents open their own tabs and work in your logged-in tools — without ever seeing a password.</p>
+<ol>
+<li><div><b>Sign in with Kilogent.</b> <span>Approve this browser once, in your workspace.</span></div></li>
+<li><div><b>Offer it to your workspaces.</b> <span>Tick the ones that may ask to use it.</span></div></li>
+<li><div><b>Share and permit in Kilogent.</b> <span>You choose which agents, and for how long.</span></div></li>
+</ol></div>
+<div class="pop"><iframe src="http://127.0.0.1:8765/popup/popup-stub.html"></iframe></div>
+</div></body></html>
