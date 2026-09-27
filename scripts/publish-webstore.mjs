@@ -213,7 +213,15 @@ async function selfTest() {
   assert.equal(readEnv(env).publishType, 'DEFAULT_PUBLISH');
   assert.throws(() => readEnv({ ...env, WEBSTORE_PUBLISH_TYPE: 'staged' }), /Allowed/);
 
-  console.log('✅ publish-webstore: version order, skip/block/upload decisions and env validation hold.');
+  // THE STORE'S OWN LIMITS, checked here because the store checks them only at upload — after the
+  // release is cut. A 140-character description once made the first upload bounce, and the fix
+  // cost a whole extra release. Every build variant ships this manifest's strings.
+  const manifest = JSON.parse(fs.readFileSync(new URL('../packages/extension/manifest.json', import.meta.url), 'utf8'));
+  assert.ok(manifest.name.length <= 75, `manifest name is ${manifest.name.length} characters; the store allows 75`);
+  assert.ok(manifest.description.length <= 132,
+    `manifest description is ${manifest.description.length} characters; the store refuses more than 132`);
+
+  console.log('✅ publish-webstore: version order, skip/block/upload decisions, env validation and the store manifest limits hold.');
 }
 
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1])).href;

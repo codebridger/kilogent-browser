@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Kilogent Browser",
   "version": "0.2.0",
-  "description": "Lend this Chrome to your Kilogent workspace so agents can use sites you are already signed in to. You choose which agents, and for how long.",
+  "description": "Lend this Chrome to your Kilogent workspace so agents can use sites you're signed in to. You choose which agents, and for how long.",
   "minimum_chrome_version": "116",
   "icons": {
     "16": "icons/icon-16.png",
