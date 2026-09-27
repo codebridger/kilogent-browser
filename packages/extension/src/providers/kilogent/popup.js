@@ -14,15 +14,47 @@
 // and both belong to this person there rather than here. Duplicating them into the popup would make
 // the extension look like the place where access is decided, which it is not.
 //
-// The markup below is VERBATIM from what `popup.html` used to hold — the stylesheet is core and
-// matches on these class names, so this is a move rather than a rewrite.
+// The markup below is VERBATIM from what `popup.html` used to hold. Its styles travel with it — see
+// STYLE, and why the stylesheet could not stay in core.
 
 import { BUILD_LABEL, KEYS, resolveEndpoint } from "./config.js";
 import { callFunction, startLogin } from "./auth.js";
 import { listMyShips } from "./api.js";
 import { parseOwnEntry } from "./blocklist.js";
 
-const MARKUP = `
+// THIS PANEL'S OWN STYLES. The comment above once said the stylesheet was core and matched on these
+// class names — then the fork adopted upstream's `popup.html`, whose stylesheet has never heard of
+// `.pick` or `.chip`, and the sign-in code, the workspace list and the blocklist all shipped as bare
+// text. A panel owns its markup, so it owns the rules for it too. Scoped to this section, because
+// core's `.err` is a red DOT and this panel's `.err` is a line of text.
+const STYLE = `
+  <style>
+    [data-panel="kilogent"] .note { color: #8889; font-size: 11px; margin: 6px 0 0; }
+    [data-panel="kilogent"] .state { display: flex; align-items: center; gap: 6px; font-size: 12px; margin: 8px 0; }
+    [data-panel="kilogent"] .dot { margin: 0; flex: none; }
+    [data-panel="kilogent"] .code {
+      font: 600 20px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+      letter-spacing: 0.14em; text-align: center; margin: 10px 0 4px;
+    }
+    [data-panel="kilogent"] .list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+    [data-panel="kilogent"] .pick {
+      display: flex; align-items: center; gap: 8px;
+      border: 1px solid #8883; border-radius: 8px; padding: 7px 9px; cursor: pointer;
+    }
+    [data-panel="kilogent"] .pick.on { border-color: #2563eb; background: #2563eb14; }
+    [data-panel="kilogent"] .pick .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    [data-panel="kilogent"] .chip {
+      display: flex; align-items: center; gap: 6px;
+      border: 1px solid #8883; border-radius: 6px; padding: 4px 8px;
+      font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    [data-panel="kilogent"] .chip .x { cursor: pointer; color: #dc2626; font-weight: 700; }
+    [data-panel="kilogent"] .who { font-size: 11px; color: #8889; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    [data-panel="kilogent"] p.err { background: none; color: #dc2626; font-size: 11px; margin-top: 8px; }
+  </style>
+`;
+
+const MARKUP = `${STYLE}
   <!-- signed out -->
   <section id="signedOut">
     <p class="note">Sign in with the Kilogent account you already have. This does not share your browser with anyone — you choose that afterwards.</p>
