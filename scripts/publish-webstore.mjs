@@ -147,6 +147,10 @@ async function publish(zipPath) {
 
   const fetchStatus = () => call(token, 'GET', `${API}/v2/${name}:fetchStatus`);
   const status = await fetchStatus();
+  // Printed whole (minus the public key) because the documented shape and the real one have already
+  // disagreed once; the next surprise should be readable from the run log, not guessed at.
+  const { publicKey: _publicKey, ...shown } = status;
+  console.log(`store status:\n${JSON.stringify(shown, null, 2)}`);
   const next = decide(status, version);
   if (next.action === 'skip') {
     summary(`⏭️ Chrome Web Store: nothing to do — ${next.reason}`);
