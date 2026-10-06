@@ -30,8 +30,8 @@ Everything Kilogent-specific lives in **one directory**, `packages/extension/src
 | `blocklist.js` | the second of the two blocklist levels |
 | `config.js` | the one URL compiled in, and the storage keys |
 
-**The rule that keeps this fork alive: never edit the core.** `executor.js`, `page-scripts.js`
-and `connection.js` come from upstream untouched — as do `sw.js`, `providers/registry.js` and
+**The rule that keeps this fork alive: never edit the core.** `executor.js`, `page-scripts.js`,
+`human.js` and `connection.js` come from upstream untouched — as do `sw.js`, `providers/registry.js` and
 `providers/bridge/` — so `git merge upstream/main` stays clean. A fix
 that belongs to everybody goes upstream as a pull request and comes back down; only branding and
 the Kilogent transport are ours.

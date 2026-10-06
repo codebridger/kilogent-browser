@@ -61,7 +61,7 @@ optional extra.
 
 | File | Conflicts? | Why |
 |---|---|---|
-| `src/sw.js`, `src/executor.js`, `src/page-scripts.js`, `src/connection.js` | **never** | byte-identical to upstream — we do not edit core |
+| `src/sw.js`, `src/executor.js`, `src/page-scripts.js`, `src/human.js`, `src/connection.js` | **never** | byte-identical to upstream — we do not edit core |
 | `src/providers/registry.js`, `src/providers/bridge/` | **never** | same |
 | `src/providers/kilogent/**` | **never** | upstream does not have it |
 | `popup.js`, `src/providers/bridge/popup.js` | **never** | byte-identical too — the popup has a seam now |
@@ -83,7 +83,7 @@ Verify that at any time:
 git fetch upstream
 for f in src/sw.js src/providers/registry.js src/providers/bridge/index.js \
          src/providers/bridge/popup.js src/executor.js src/connection.js \
-         src/page-scripts.js popup.js; do
+         src/page-scripts.js src/human.js popup.js; do
   git diff --quiet upstream/main -- "packages/extension/$f" \
     && echo "ok    $f" || echo "EDITED $f  ← a fork must not"
 done
@@ -110,7 +110,7 @@ Ask one question: **would this help somebody who has never heard of Kilogent?**
 | Change | Where it belongs |
 |---|---|
 | A CDP bug, a snapshot fix, a new browser action | **upstream**, as a pull request |
-| Anything in `executor.js` or `page-scripts.js` | **upstream**, always |
+| Anything in `executor.js`, `page-scripts.js` or `human.js` (how input is shaped to look human) | **upstream**, always |
 | Our endpoint, our auth, our storage keys, our strings | here |
 | A new file under `providers/kilogent/` | here |
 
@@ -290,9 +290,9 @@ broken import or a renamed storage key fails there rather than in somebody's bro
 ### The rule that makes all of this work
 
 **A fork never edits the core.** Put your code in `providers/<yours>/` and leave `sw.js`,
-`executor.js`, `page-scripts.js`, `connection.js`, `providers/registry.js` and `providers/bridge/`
-exactly as upstream wrote them. That single habit is the difference between `git merge
-upstream/main` being routine and being a day's work.
+`executor.js`, `page-scripts.js`, `human.js`, `connection.js`, `providers/registry.js` and
+`providers/bridge/` exactly as upstream wrote them. That single habit is the difference between
+`git merge upstream/main` being routine and being a day's work.
 
 This fork is currently down to **one directory and three lines** of `providers/index.js` under
 `src/` — plus the popup, which has no seam yet. That is what the rule buys.
