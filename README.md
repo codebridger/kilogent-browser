@@ -10,6 +10,22 @@ your machine — no inbound port, no tunnel, no `--remote-debugging` flag.
   <img src="docs/infographic.svg" alt="An agent drives your real local Chrome through an outbound-only MV3 extension" width="100%">
 </p>
 
+## Using it with Kilogent
+
+Three short steps, no developer mode:
+
+1. Install **Kilogent Browser** from the Chrome Web Store.
+2. Click the extension, choose **Sign in with Kilogent**, and approve the code in Kilogent.
+3. Give the browser a name, for example "Work Chrome". Kilogent suggests one, so this is usually one click.
+
+That is the whole setup. Then, in Kilogent, open an agent and pick this browser in its **Browser**
+field. **My browsers** in Kilogent shows every agent that can use it and what each one did, and
+turns any of them off. The extension's **Pause all agents** button stops them all at once, even
+when Kilogent is not open.
+
+The steps below with **Load unpacked** are for developers: running a build from this repository,
+or the self-hosted bridge.
+
 ## This is a fork, and that is on purpose
 
 Upstream is **[navidshad/remote-browser-mcp](https://github.com/navidshad/remote-browser-mcp)** —
@@ -161,6 +177,9 @@ node packages/bridge-server/dist/index.js
 
 ### 2 · Load the extension, in one dedicated profile
 
+This is the developer path: it loads the code in this repository. For Kilogent, install it from the
+Chrome Web Store instead (see "Using it with Kilogent" above).
+
 1. Create a **dedicated Chrome profile** for the agent, ideally an account-less local profile so Chrome sync can't copy the extension into or out of it.
 2. `chrome://extensions` → **Developer mode** → **Load unpacked** → select [`packages/extension/`](packages/extension). Install it in **only** this profile, and turn **off** Extensions sync — that isolation is what keeps the agent off your other profiles.
 3. Open the popup → **+ Add profile**. **Agent URL** is `ws://localhost:3002` on one machine (`wss://…` once it is behind a tunnel); **Access Token** is your `BRIDGE_ACCESS_TOKEN`. Press **Save**. The status line should read *Connected*.
@@ -214,7 +233,7 @@ nothing changed anywhere, no release is cut.
 
 | Package | Where it goes | How to get it |
 |---|---|---|
-| Chrome extension | attached to the GitHub Release | download, unzip, load unpacked |
+| Chrome extension | the Chrome Web Store (the production build), and attached to the GitHub Release | install from the store; developers can download, unzip and load unpacked |
 | `remote-browser-relay` | npm | `npm i -g remote-browser-relay` |
 
 `dev` publishes the relay as a prerelease on npm's `dev` tag (`npm i -g remote-browser-relay@dev`)
