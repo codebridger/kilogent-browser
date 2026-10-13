@@ -80,6 +80,10 @@ const MARKUP = `${STYLE}
       <button id="nameDone">Done</button>
       <button id="nameCancel" class="secondary hidden">Cancel</button>
     </div>
+    <p class="who" id="nameWho"></p>
+    <!-- The way out when this is the wrong account. Naming is required to USE the browser, never to
+         leave: a name step with no exit traps whoever signed in as the wrong person. -->
+    <div class="row"><button id="nameSignOut" class="linkish">Not you? Sign out</button></div>
   </section>
 
   <!-- signed in and named -->
@@ -188,6 +192,8 @@ export function createKilogentPanel(deps) {
       $("nameWhy").textContent = "You pick browsers by name in Kilogent, so each of yours needs its own.";
     }
     show($("nameCancel"), naming.editing);
+    const who = snapshot.session?.email || snapshot.session?.uid || "";
+    $("nameWho").textContent = who ? `Signed in as ${who}` : "";
     const check = checkBrowserName($("nameInput").value, takenNames);
     $("nameDone").disabled = naming.busy || !check.ok;
     if (!naming.prefilled) void prefillName();
@@ -430,14 +436,17 @@ export function createKilogentPanel(deps) {
         show($("error"), false);
         drawBlocklist();
       });
-      $("signOut").addEventListener("click", async () => {
+      const signOut = async () => {
         // Only disconnects. The browser stays on My browsers, offline, with its links; signing in
         // again brings it back. Removing it is a deliberate act there, not here.
         await deps.send({ type: "signOut" });
         naming = { editing: false, busy: false, prefilled: false };
         $("nameInput").value = "";
+        nameError("", "");
         await reload();
-      });
+      };
+      $("signOut").addEventListener("click", () => void signOut());
+      $("nameSignOut").addEventListener("click", () => void signOut());
 
       void reload();
     },

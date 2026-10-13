@@ -241,7 +241,7 @@ export function createKilogentTransport(deps) {
         // account was signed in then; the popup asks for a name for this one, prefilled.
         await storage.remove([KEYS.pending, KEYS.registered, KEYS.ships]);
         lastError = "";
-        await reconcile();
+        await reconcile({ forceBeat: true });
         return;
       }
 
@@ -418,7 +418,7 @@ export function createKilogentTransport(deps) {
    * all depend on the same question — is there a live session — and separate schedules meant three
    * different answers to it could be in flight at once.
    */
-  async function reconcile() {
+  async function reconcile({ forceBeat = false } = {}) {
     // The eviction backstop. If the worker was killed mid-handshake, the loop is gone but the
     // handshake is not — it is in storage — so the alarm re-enters it. Costs latency, never the
     // login. Deliberately not awaited: it can run for ten minutes.
@@ -450,7 +450,7 @@ export function createKilogentTransport(deps) {
       return;
     }
 
-    let state = await beat(idToken, session, id);
+    let state = await beat(idToken, session, id, { force: forceBeat });
     if (state === "unregistered" && session.flow !== 2) {
       // An updated old install the migration did not cover. It keeps working — see adoptLegacyName.
       if (await adoptLegacyName(idToken, session, id)) state = await beat(idToken, session, await identity(), { force: true });
@@ -531,7 +531,10 @@ export function createKilogentTransport(deps) {
     }
     await remember(session, id, name, false);
     lastError = "";
-    await reconcile(); // opens the socket if this was the first name
+    // FORCED: the throttled answer from a few seconds ago is "unregistered", and reusing it left a
+    // freshly named browser offline until the next alarm — up to a minute in which an agent run
+    // was told the browser was not there. A real local stack caught it.
+    await reconcile({ forceBeat: true }); // opens the socket if this was the first name
     return { ok: true, name };
   }
 
@@ -556,7 +559,7 @@ export function createKilogentTransport(deps) {
     await storage.set({ [KEYS.paused]: paused, [KEYS.pauseDirty]: true });
     browser = { ...browser, paused };
     // Best effort now; `beat` keeps retrying while it is dirty.
-    void reconcile().catch(() => {});
+    void reconcile({ forceBeat: true }).catch(() => {});
     return { ok: true, paused };
   }
 

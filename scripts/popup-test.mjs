@@ -404,6 +404,16 @@ await check("right after sign-in, the name step is shown and cannot be skipped",
   assert.equal($("nameDone").disabled, true, "an empty name cannot be submitted");
 });
 
+await check("the name step can always be left by signing out — naming is required to use, not to leave", async () => {
+  const { panel, $, visible, rec, tick } = kilogentPanel();
+  panel.render({ session: SESSION, browser: { needsName: true }, kilogent: null, lastError: "" });
+  assert.ok(visible("naming"));
+  assert.match($("nameWho").textContent, /a@b\.test/, "it says which account is signed in");
+  $("nameSignOut").click();
+  await tick();
+  assert.deepEqual(rec.sent.at(-1), { type: "signOut" });
+});
+
 await check("a taken name shows the server's suggestion as a one-click fix", async () => {
   const { panel, $, rec, tick } = kilogentPanel({
     answers: { setName: { ok: false, code: "name_taken", suggestion: "Work Chrome (2)", message: "taken" } },
