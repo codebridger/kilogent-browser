@@ -39,7 +39,7 @@ import {
   isAllowed,
   isBlocked,
 } from "../packages/extension/src/providers/kilogent/blocklist.js";
-import { callFunction, startLogin } from "../packages/extension/src/providers/kilogent/auth.js";
+import { authBase, callFunction, startLogin } from "../packages/extension/src/providers/kilogent/auth.js";
 import {
   suggestBrowserName,
   registerBrowser,
@@ -798,6 +798,24 @@ async function main() {
   ok(
     minted?.relayUrl === "wss://relay.test/ws" && sent("mintBrowserRelayTicket", { browserId: "brw_x" }),
     "the ticket is minted through the dispatcher — the call whose 404 kept every socket closed",
+  );
+
+  // ── the Auth emulator, for a local stack only ───────────────────────────────────────────────
+  const LOCAL = "http://127.0.0.1:20701/demo/us-central1";
+  ok(
+    authBase(LOCAL, "http://127.0.0.1:20700").identity === "http://127.0.0.1:20700/identitytoolkit.googleapis.com",
+    "a local endpoint signs in through the Auth emulator the server names",
+  );
+  ok(
+    authBase("https://europe-west1-kilogent-crew-prod.cloudfunctions.net", "http://127.0.0.1:20700").identity ===
+      "https://identitytoolkit.googleapis.com",
+    "a production endpoint ignores it — no server answer can point tokens away from Google",
+  );
+  ok(
+    authBase(LOCAL, "https://evil.test").identity === "https://identitytoolkit.googleapis.com" &&
+      authBase("http://127.0.0.1.evil.test/x", "http://127.0.0.1:20700").identity ===
+        "https://identitytoolkit.googleapis.com",
+    "and neither a remote emulator address nor a look-alike loopback host is honoured",
   );
 
   let refusal = null;

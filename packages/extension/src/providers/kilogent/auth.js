@@ -100,12 +100,28 @@ export async function startLogin(endpoint, label) {
 // ── the Firebase session ──────────────────────────────────────────────────────────────────────
 
 /**
+ * Where Firebase Auth's REST API lives for this session: Google, or a local Auth EMULATOR.
+ *
+ * The emulator's address arrives from the server with the approval, and is honoured ONLY when this
+ * install's own endpoint is a loopback `http://` address — a local stack. A production build talks
+ * to an https endpoint, so no answer from any server can point its tokens anywhere but Google.
+ */
+export function authBase(endpoint, emulatorOrigin) {
+  const local = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(\/|$)/.test(resolveEndpoint(endpoint));
+  const emu = typeof emulatorOrigin === "string" ? emulatorOrigin.replace(/\/+$/, "") : "";
+  if (local && /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(emu)) {
+    return { identity: `${emu}/identitytoolkit.googleapis.com`, secure: `${emu}/securetoken.googleapis.com` };
+  }
+  return { identity: "https://identitytoolkit.googleapis.com", secure: "https://securetoken.googleapis.com" };
+}
+
+/**
  * Trade the custom token for a session. `returnSecureToken` is what makes the response carry a
  * refresh token; without it this browser would be signed out an hour later with no way back.
  */
-export async function exchangeCustomToken(apiKey, customToken) {
+export async function exchangeCustomToken(apiKey, customToken, base = authBase()) {
   const res = await fetch(
-    `https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${encodeURIComponent(apiKey)}`,
+    `${base.identity}/v1/accounts:signInWithCustomToken?key=${encodeURIComponent(apiKey)}`,
     {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -129,9 +145,9 @@ export async function exchangeCustomToken(apiKey, customToken) {
  * because the alternative — a worker retrying a dead token every minute forever — is a browser
  * that looks connected, does nothing, and gives no one a reason to look.
  */
-export async function refreshSession(apiKey, refreshToken) {
+export async function refreshSession(apiKey, refreshToken, base = authBase()) {
   const res = await fetch(
-    `https://securetoken.googleapis.com/v1/token?key=${encodeURIComponent(apiKey)}`,
+    `${base.secure}/v1/token?key=${encodeURIComponent(apiKey)}`,
     {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -193,7 +209,12 @@ export async function getIdToken(storage, { onSignedOut } = {}) {
   if (!session) return null;
   if (!needsRefresh(session)) return session.idToken;
   try {
-    const fresh = await refreshSession(session.apiKey, session.refreshToken);
+    const store = await storage.get(KEYS.endpoint);
+    const fresh = await refreshSession(
+      session.apiKey,
+      session.refreshToken,
+      authBase(store[KEYS.endpoint], session.authEmulatorOrigin),
+    );
     await saveSession(storage, { ...session, ...fresh });
     return fresh.idToken;
   } catch (e) {

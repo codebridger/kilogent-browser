@@ -19,6 +19,7 @@ import { Executor } from "../../executor.js";
 import { KilogentConnection } from "./connection.js";
 import { KEYS, SCHEMA_VERSION } from "./config.js";
 import {
+  authBase,
   callFunction,
   exchangeCustomToken,
   getIdToken,
@@ -202,10 +203,21 @@ export function createKilogentTransport(deps) {
         // Exchanged HERE, in the same loop that claimed it: the custom token is single-use and
         // already spent as far as the service is concerned, so handing it anywhere else adds a
         // hop where it can be lost with no way to ask for another.
-        const tokens = await exchangeCustomToken(
-          result.apiKey,
-          result.customToken,
-        );
+        // The code is SPENT the moment the server says approved, so a failure here cannot be
+        // retried: drop the handshake and say so, rather than show "Waiting for approval…" until
+        // it expires.
+        let tokens;
+        try {
+          tokens = await exchangeCustomToken(
+            result.apiKey,
+            result.customToken,
+            authBase(pending.endpoint, result.authEmulatorOrigin),
+          );
+        } catch (e) {
+          await storage.remove(KEYS.pending);
+          lastError = `Approved, but signing in could not finish: ${e?.message || e}. Try again.`;
+          return;
+        }
         teardown();
         await storage.set({
           [KEYS.session]: {
@@ -214,6 +226,8 @@ export function createKilogentTransport(deps) {
             email: result.email ?? "",
             apiKey: result.apiKey,
             projectId: result.projectId,
+            // Kept so a refresh goes to the same place. Ignored unless the endpoint is local.
+            ...(result.authEmulatorOrigin ? { authEmulatorOrigin: result.authEmulatorOrigin } : {}),
             // Signed in with names required. An install without this mark is an UPDATE of an
             // older version; see `adoptLegacyName`.
             flow: 2,
