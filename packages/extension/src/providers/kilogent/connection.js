@@ -52,6 +52,8 @@ export class KilogentConnection {
     this.sessionAllowlists = new Map();
     /** sessionId -> {count, last} of refusals this session has had. See `refusalCountFor`. */
     this.refusals = new Map();
+    /** chromeTabId -> the last address `Fetch` refused on it. See `pageUrlFor`. */
+    this.lastBlockedUrl = new Map();
     this.executor = deps.makeExecutor(
       (attached, tabId, url, reason) => this.pushStatus(attached, tabId, url, reason),
       identity.label || "Kilogent",
@@ -74,6 +76,7 @@ export class KilogentConnection {
     this.executor.onDetach(source, reason);
   }
   routeTabRemoved(tabId) {
+    this.lastBlockedUrl.delete(tabId);
     this.executor.onTabRemoved(tabId);
   }
 
@@ -174,6 +177,12 @@ export class KilogentConnection {
     try {
       const h = await this.executor.sendCdp(rec.chromeTabId, "Page.getNavigationHistory", {});
       const url = h?.entries?.[h.currentIndex]?.url;
+      // A navigation `Fetch` failed leaves the tab on Chrome's own error page, whose address is
+      // `chrome-error://chromewebdata/`. The place the action happened is the address that was
+      // refused, so name that instead — it is what the owner's activity log needs to show.
+      if (typeof url === "string" && url.startsWith("chrome-error://")) {
+        return this.lastBlockedUrl.get(rec.chromeTabId) ?? rec.url ?? null;
+      }
       return typeof url === "string" && url ? url : (rec.url ?? null);
     } catch {
       return rec.url ?? null;
@@ -240,6 +249,7 @@ export class KilogentConnection {
           errorReason: "BlockedByClient",
         });
         this.deps.log?.("[kilogent] blocked a navigation", url ?? "(unknown)");
+        if (typeof url === "string") this.lastBlockedUrl.set(tabId, url);
         // Recorded so the command that caused it can REPORT it. Without this the refusal is
         // invisible: the tab simply never moves, and every later check sees an allowed page.
         if (idx) {

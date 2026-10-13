@@ -438,6 +438,25 @@ async function main() {
     JSON.stringify(whilePausedBody ?? {}).includes("[paused]"),
     "and so does the pause, with its own code",
   );
+  // After a block the tab sits on Chrome's error page. The Page URL must name the refused address
+  // — found in the dev-environment run, where the owner's activity log showed "—" for it.
+  {
+    const session = conn.executor.sessions.get("job2");
+    const rec = session?.tabs.get(session.activeTab);
+    const realSendCdp = conn.executor.sendCdp.bind(conn.executor);
+    conn.executor.sendCdp = async (tabId, method, params) =>
+      method === "Page.getNavigationHistory"
+        ? { currentIndex: 0, entries: [{ url: "chrome-error://chromewebdata/" }] }
+        : realSendCdp(tabId, method, params);
+    conn.lastBlockedUrl.set(rec.chromeTabId, "https://elsewhere.test/page");
+    ok(
+      (await conn.pageUrlFor("job2")) === "https://elsewhere.test/page",
+      "on Chrome's blocked page, Page URL names the address that was refused, not chrome-error://",
+    );
+    conn.executor.sendCdp = realSendCdp;
+    conn.lastBlockedUrl.delete(rec.chromeTabId);
+  }
+
   // Back to "any site", the same way Crew would do it: an empty list on the next dispatch.
   await dispatch(port, {
     name: "browser_navigate",
