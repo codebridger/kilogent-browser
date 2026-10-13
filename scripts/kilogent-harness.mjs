@@ -380,6 +380,10 @@ async function main() {
     timeoutMs: 5000,
   });
   ok(resumed.body?.result?.isError !== true, "and resuming lets the next command through");
+  ok(
+    /Page URL: https?:\/\//.test(JSON.stringify(resumed.body?.result ?? {})),
+    "every result names the page it ended on, so Kilogent's activity log can say where it happened",
+  );
 
   // ── the allow list: a link's named sites ──────────────────────────────────────────────────────
   // Set on the connection directly: the relay in this tree does not carry `allowedOrigins` until

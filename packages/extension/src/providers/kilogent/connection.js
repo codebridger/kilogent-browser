@@ -160,6 +160,37 @@ export class KilogentConnection {
     return this.refusals.get(sessionId)?.count ?? 0;
   }
 
+  /**
+   * Where this session's active tab is right now, or null.
+   *
+   * READ LIVE, not from core's cached `rec.url`, which is stale after a click navigates. Asked of
+   * the browser through `Page.getNavigationHistory`: no page script runs, and on Chrome's "blocked"
+   * page it still names the address that was tried — which is where the action happened.
+   */
+  async pageUrlFor(sessionId) {
+    const session = this.executor.sessions.get(sessionId);
+    const rec = session?.activeTab ? session.tabs.get(session.activeTab) : null;
+    if (!rec) return null;
+    try {
+      const h = await this.executor.sendCdp(rec.chromeTabId, "Page.getNavigationHistory", {});
+      const url = h?.entries?.[h.currentIndex]?.url;
+      return typeof url === "string" && url ? url : (rec.url ?? null);
+    } catch {
+      return rec.url ?? null;
+    }
+  }
+
+  /**
+   * Add `Page URL: <url>` to a result, so Kilogent's per-link activity log can say WHERE each action
+   * happened (PRFAQ-001: "which sites the agent opened and what it did"). Best effort: a result
+   * whose page cannot be read is sent as it was.
+   */
+  async withPageUrl(sessionId, result) {
+    const url = await this.pageUrlFor(sessionId);
+    if (!url || !result || !Array.isArray(result.content)) return result;
+    return { ...result, content: [...result.content, { type: "text", text: `Page URL: ${url}` }] };
+  }
+
   noteRefusal(sessionId, refusal) {
     if (sessionId == null) return;
     const prev = this.refusals.get(sessionId);
@@ -518,6 +549,7 @@ export class KilogentConnection {
         // navigation it caused was failed before loading, or the page it left the tab on is not
         // allowed. Nothing from the refused site was loaded; the tab shows Chrome's "blocked" page.
         const last = this.refusals.get(m.sessionId)?.last;
+        const at = await this.pageUrlFor(m.sessionId);
         this.send({
           t: "res",
           id: m.id,
@@ -525,13 +557,14 @@ export class KilogentConnection {
           error: {
             code: last?.code || "blocked",
             message:
-              last?.message ||
-              withCode("blocked", "That went to an address this browser refused, so the page was not loaded."),
+              (last?.message ||
+                withCode("blocked", "That went to an address this browser refused, so the page was not loaded.")) +
+              (at ? `\nPage URL: ${at}` : ""),
           },
         });
         return;
       }
-      this.send({ t: "res", id: m.id, ok: true, result });
+      this.send({ t: "res", id: m.id, ok: true, result: await this.withPageUrl(m.sessionId, result) });
     } catch (e) {
       this.send({
         t: "res",
