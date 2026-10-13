@@ -386,8 +386,9 @@ async function main() {
   );
 
   // ── the allow list: a link's named sites ──────────────────────────────────────────────────────
-  // Set on the connection directly: the relay in this tree does not carry `allowedOrigins` until
-  // the upstream change is merged. What is tested is the extension's half.
+  // THROUGH THE REAL RELAY: Crew sends `allowedOrigins` on the dispatch, the relay pushes it on
+  // `session_config`, and the extension enforces it. A relay that dropped the field would leave
+  // every site allowed and the refusals below would not happen.
   console.log("-- allow list --");
   ok(isAllowed("https://www.vinted.com/x", ["vinted.com"]), "a subdomain of an allowed host is allowed");
   ok(isAllowed("http://vinted.com/", ["https://vinted.com"]), "on http as well as https");
@@ -396,11 +397,11 @@ async function main() {
   ok(isAllowed("https://any.test/", []) && isAllowed("https://any.test/", undefined), "empty or absent allows any site");
   ok(!isAllowed("javascript:alert(1)", []), "a URL with no origin fails closed even with no list");
 
-  conn.setAllowlist("job2", ["ok.test", "bank.test"]);
   const inside = await dispatch(port, {
     name: "browser_navigate",
     args: { url: "https://www.ok.test/" },
     sessionId: "job2",
+    allowedOrigins: ["ok.test", "bank.test"],
     timeoutMs: 5000,
   });
   ok(!JSON.stringify(inside.body ?? {}).includes("not one this agent"), "a named site loads");
@@ -437,7 +438,14 @@ async function main() {
     JSON.stringify(whilePausedBody ?? {}).includes("[paused]"),
     "and so does the pause, with its own code",
   );
-  conn.setAllowlist("job2", []);
+  // Back to "any site", the same way Crew would do it: an empty list on the next dispatch.
+  await dispatch(port, {
+    name: "browser_navigate",
+    args: { url: "https://ok.test/" },
+    sessionId: "job2",
+    allowedOrigins: [],
+    timeoutMs: 5000,
+  });
 
   // ── the gap: a click, which names no URL ──────────────────────────────────────────────────────
   //
