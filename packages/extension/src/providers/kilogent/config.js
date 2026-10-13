@@ -78,8 +78,35 @@ export function resolveEndpoint(stored) {
 export const KEYS = {
   session: "kilogent.session",
   browserId: "kilogent.browserId",
+  /**
+   * The workspaces an older version offered this browser to. NO LONGER WRITTEN — the browser
+   * belongs to the account now (PRFAQ-001) — and removed on sight. Kept here only so sign-out and
+   * the upgrade path can clear it.
+   */
   ships: "kilogent.ships",
+  /**
+   * The browser's NAME as last typed or accepted here. The storage key says `label` because that
+   * is what older versions called it, and keeping the key is what lets an update prefill the
+   * naming step with the name the person already chose.
+   */
   label: "kilogent.label",
+  /**
+   * The server's last word on this browser's record: `{uid, browserId, endpoint, name,
+   * needsRename}`, refreshed by every heartbeat. Only a CACHE — the heartbeat's `registered` is the
+   * truth — used so that a network blip does not drop a working socket.
+   */
+  registered: "kilogent.registered",
+  /**
+   * PAUSE ALL AGENTS, as a local switch. LOCAL FIRST, and kept across sign-out, on purpose: it has
+   * to work when Kilogent is not open, not reachable, or not answering — so while it is on, this
+   * extension refuses every relay command itself, whatever the server believes. The server is told
+   * too, and re-told on every reconcile until it agrees.
+   */
+  paused: "kilogent.paused",
+  /** A pause change the server has not acknowledged yet. Retried on every reconcile. */
+  pauseDirty: "kilogent.pauseDirty",
+  /** Where "My browsers" lives — the Kilogent web app's origin, learned from the sign-in page. */
+  appOrigin: "kilogent.appOrigin",
   endpoint: "kilogent.endpoint",
   blocklist: "kilogent.blocklist",
   /**
@@ -90,6 +117,12 @@ export const KEYS = {
    * The extension then had no list, treated that as "nothing is blocked", and allowed everything.
    */
   sessions: "kilogent.sessions",
+  /**
+   * Per-session ALLOW lists, `{[sessionId]: origins[]}` — the sites a link names. Persisted for
+   * the same reason as `sessions`. A session with no entry here has no allow list (any site except
+   * the blocklist); whether the session is KNOWN at all is decided by `sessions` alone.
+   */
+  sessionAllows: "kilogent.sessionAllows",
   /**
    * An in-flight device handshake: `{userCode, deviceCode, expiresAt, label, endpoint}`.
    *
@@ -106,3 +139,6 @@ export const KEYS = {
 
 /** Current storage schema. A mismatch clears Kilogent's keys rather than trying to upgrade them. */
 export const SCHEMA_VERSION = 1;
+
+/** The path of the account-level "My browsers" page in the Kilogent web app. */
+export const MY_BROWSERS_PATH = "/browsers";

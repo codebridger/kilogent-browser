@@ -359,6 +359,116 @@ await check("a checkout is labelled Dev — it talks to the development project"
   assert.equal(config.BUILD_LABEL, "Dev");
 });
 
+// ── the three-step flow (PRFAQ-001) ───────────────────────────────────────────────────────────
+function kilogentPanel({ answers = {}, store = {} } = {}) {
+  const window = popupWindow();
+  const section = window.document.createElement("section");
+  window.document.body.appendChild(section);
+  const rec = recorder(answers);
+  const opened = [];
+  const panel = createKilogentPanel({
+    storage: fakeStorage(store),
+    send: rec.send,
+    openTab: (url) => opened.push(url),
+    buildLabel: null,
+  });
+  panel.mount(section);
+  const $ = (id) => section.querySelector(`#${id}`);
+  const visible = (id) => !$(id).classList.contains("hidden");
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  return { panel, section, rec, opened, $, visible, tick };
+}
+const SESSION = { uid: "u1", email: "a@b.test", projectId: "p" };
+/** Type into the name field the way a person does, so the panel's `input` listener runs. */
+function typeName($, value) {
+  const input = $("nameInput");
+  input.value = value;
+  const { Event } = input.ownerDocument.defaultView;
+  input.dispatchEvent(new Event("input"));
+}
+
+await check("there is no workspace picker any more", async () => {
+  const { section } = kilogentPanel();
+  assert.equal(section.querySelector("#ships"), null);
+  assert.doesNotMatch(section.textContent, /Offer it to/);
+});
+
+await check("right after sign-in, the name step is shown and cannot be skipped", async () => {
+  const { panel, $, visible } = kilogentPanel();
+  panel.render({ session: SESSION, browser: { needsName: true }, kilogent: null, lastError: "" });
+  assert.ok(visible("naming"), "the name step is shown");
+  assert.ok(!visible("signedIn"), "the status view is not");
+  assert.ok(!visible("nameCancel"), "and there is no way past it but a name");
+  $("nameInput").value = "   ";
+  typeName($, $("nameInput").value);
+  assert.equal($("nameDone").disabled, true, "an empty name cannot be submitted");
+});
+
+await check("the name step can always be left by signing out — naming is required to use, not to leave", async () => {
+  const { panel, $, visible, rec, tick } = kilogentPanel();
+  panel.render({ session: SESSION, browser: { needsName: true }, kilogent: null, lastError: "" });
+  assert.ok(visible("naming"));
+  assert.match($("nameWho").textContent, /a@b\.test/, "it says which account is signed in");
+  $("nameSignOut").click();
+  await tick();
+  assert.deepEqual(rec.sent.at(-1), { type: "signOut" });
+});
+
+await check("a taken name shows the server's suggestion as a one-click fix", async () => {
+  const { panel, $, rec, tick } = kilogentPanel({
+    answers: { setName: { ok: false, code: "name_taken", suggestion: "Work Chrome (2)", message: "taken" } },
+  });
+  panel.render({ session: SESSION, browser: { needsName: true }, kilogent: null, lastError: "" });
+  $("nameInput").value = "Work Chrome";
+  typeName($, $("nameInput").value);
+  $("nameDone").click();
+  await tick();
+  await tick();
+  assert.deepEqual(rec.sent.at(-1), { type: "setName", name: "Work Chrome" });
+  assert.match($("nameError").textContent, /already have a browser with this name/);
+  assert.equal($("useSuggestion").textContent, 'Use "Work Chrome (2)"');
+});
+
+await check("once named: the name, the status, My browsers and Pause all agents", async () => {
+  const { panel, $, visible, rec, opened, tick } = kilogentPanel({
+    answers: { setPaused: { ok: true, paused: true } },
+    store: { "kilogent.appOrigin": "https://app.test" },
+  });
+  panel.render({
+    session: SESSION,
+    browser: { name: "Work Chrome", registered: true, needsName: false, paused: false },
+    kilogent: { connState: "connected", tabCount: 0 },
+    lastError: "",
+  });
+  assert.ok(visible("signedIn"));
+  assert.equal($("browserName").textContent, "Work Chrome");
+  assert.match($("stateText").textContent, /^Online/);
+  $("myBrowsers").click();
+  await tick();
+  await tick();
+  assert.deepEqual(opened, ["https://app.test/browsers"]);
+  $("pause").click();
+  await tick();
+  await tick();
+  assert.deepEqual(rec.sent.at(-1), { type: "setPaused", paused: true });
+  assert.ok(visible("pausedNote"), "the paused state is said out loud");
+  assert.equal($("pause").textContent, "Resume agents");
+});
+
+await check("an updated install with a made-up name is asked to rename, and keeps working", async () => {
+  const { panel, $, visible, tick } = kilogentPanel();
+  panel.render({
+    session: SESSION,
+    browser: { name: "Chrome (2)", registered: true, needsName: false, needsRename: true },
+    kilogent: { connState: "connected", tabCount: 1 },
+    lastError: "",
+  });
+  await tick();
+  assert.ok(visible("naming"));
+  assert.match($("nameWhy").textContent, /keeps working meanwhile/);
+  assert.equal($("nameInput").value, "Chrome (2)", "prefilled, so keeping it is one click");
+});
+
 if (failures.length) {
   console.error(`\n✗ popup: ${failures.length} failed, ${pass} passed.`);
   for (const f of failures) console.error(`    ${f}`);

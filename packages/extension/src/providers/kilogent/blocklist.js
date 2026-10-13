@@ -81,3 +81,38 @@ export function parseOwnEntry(raw) {
   if (!secure || !plain) return { ok: false, message: `"${text}" is not an address.` };
   return { ok: true, origins: [secure, plain] };
 }
+
+// ── the allow list ────────────────────────────────────────────────────────────────────────────
+//
+// A link in Kilogent can name the sites its agent needs (PRFAQ-001). When it does, the session
+// arrives with `allowedOrigins`, and nothing outside them may load. The blocklist still wins: a
+// site on both lists is blocked.
+//
+// MATCHED ON HOST AND ITS SUBDOMAINS, on http or https — unlike the blocklist's exact origin, and
+// on purpose. An allow list that is exact breaks on the first redirect to `www.` or to a login
+// subdomain; a blocklist that is loose blocks more, which is the safe direction for a blocklist and
+// the wrong one for an allow list. The boundary is a dot, so `vinted.com.evil.com` never matches
+// `vinted.com`.
+
+/** The host an allow entry names — from an origin, a URL or a bare host — or null. */
+export function allowedHostOf(entry) {
+  const text = String(entry ?? "").trim();
+  if (!text) return null;
+  const origin = originOf(text.includes("://") ? text : `https://${text}`);
+  return origin ? new URL(origin).hostname.toLowerCase() : null;
+}
+
+/**
+ * May this URL load under this allow list? Empty or absent means ANY site (the blocklist alone
+ * decides). A URL with no usable origin FAILS CLOSED, exactly as `isBlocked` does.
+ */
+export function isAllowed(url, allowed) {
+  const origin = originOf(url);
+  if (origin === null) return false;
+  if (!Array.isArray(allowed) || allowed.length === 0) return true;
+  const host = new URL(origin).hostname.toLowerCase();
+  return allowed.some((entry) => {
+    const h = allowedHostOf(entry);
+    return !!h && (host === h || host.endsWith(`.${h}`));
+  });
+}
