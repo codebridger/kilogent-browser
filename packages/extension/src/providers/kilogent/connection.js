@@ -21,6 +21,16 @@ const BACKOFF_CAP_MS = 30000;
 
 import { KEYS } from "./config.js";
 
+/**
+ * A refusal sentence with its code at the end, e.g. "… in Kilogent. [not_allowed]".
+ *
+ * IN THE TEXT, because the relay hands the agent `error.message` and drops `error.code` — and
+ * Kilogent branches on the code to log the call as refused and to put it in the owner's words.
+ */
+export function withCode(code, message) {
+  return `${message} [${code}]`;
+}
+
 export class KilogentConnection {
   /**
    * @param {{browserId:string,label:string,agentString?:string,extensionVersion?:string}} identity
@@ -40,8 +50,8 @@ export class KilogentConnection {
     this.sessionBlocklists = new Map();
     /** Allow lists, per open session — the sites the link names. Absent or empty = any site. */
     this.sessionAllowlists = new Map();
-    /** sessionId -> how many navigations `Fetch` has refused for it. See `blockedCountFor`. */
-    this.blockedNavigations = new Map();
+    /** sessionId -> {count, last} of refusals this session has had. See `refusalCountFor`. */
+    this.refusals = new Map();
     this.executor = deps.makeExecutor(
       (attached, tabId, url, reason) => this.pushStatus(attached, tabId, url, reason),
       identity.label || "Kilogent",
@@ -83,7 +93,11 @@ export class KilogentConnection {
     // `knowsSession`. This is the arm that used to say yes to everything after a worker restart.
     if (!this.knowsSession(ctx?.sessionId)) return this.unknownPolicyRefusal();
     const refused = this.refusalFor(url, ctx?.sessionId);
-    return refused ? refused.message : true;
+    if (!refused) return true;
+    // Noted so the command running now answers as an ERROR. Core hands this sentence back as a
+    // normal result, which Kilogent's activity log would record as a successful call.
+    this.noteRefusal(ctx?.sessionId, refused);
+    return refused.message;
   }
 
   /**
@@ -95,15 +109,19 @@ export class KilogentConnection {
     if (this.deps.isBlocked(url, this.blocklistFor(sessionId))) {
       return {
         code: "blocked",
-        message:
+        message: withCode(
+          "blocked",
           "That address is blocked on this browser. Ask its owner, or a captain — you cannot change this yourself.",
+        ),
       };
     }
     if (this.deps.isAllowed && !this.deps.isAllowed(url, this.sessionAllowlists.get(sessionId))) {
       return {
         code: "not_allowed",
-        message:
+        message: withCode(
+          "not_allowed",
           "That site is not one this agent was given on this browser. Ask the browser's owner to add it to the link in Kilogent.",
+        ),
       };
     }
     return null;
@@ -133,9 +151,19 @@ export class KilogentConnection {
    *
    * A counter rather than a flag, and keyed by SESSION rather than globally: two sessions run
    * concurrently on one connection, and a block in one must not refuse the other's command.
+   *
+   * BOTH DOORS COUNT: a navigation `Fetch` failed, and a place `allowUrl` refused after an action.
+   * The last refusal is kept so the command can answer with ITS reason (`blocked` or
+   * `not_allowed`) rather than a generic one.
    */
-  blockedCountFor(sessionId) {
-    return this.blockedNavigations.get(sessionId) ?? 0;
+  refusalCountFor(sessionId) {
+    return this.refusals.get(sessionId)?.count ?? 0;
+  }
+
+  noteRefusal(sessionId, refusal) {
+    if (sessionId == null) return;
+    const prev = this.refusals.get(sessionId);
+    this.refusals.set(sessionId, { count: (prev?.count ?? 0) + 1, last: refusal });
   }
 
   async armTab(chromeTabId) {
@@ -184,7 +212,10 @@ export class KilogentConnection {
         // Recorded so the command that caused it can REPORT it. Without this the refusal is
         // invisible: the tab simply never moves, and every later check sees an allowed page.
         if (idx) {
-          this.blockedNavigations.set(idx.sessionId, this.blockedCountFor(idx.sessionId) + 1);
+          const why =
+            (typeof url === "string" && this.knowsSession(idx.sessionId) && this.refusalFor(url, idx.sessionId)) ||
+            { code: "blocked", message: this.unknownPolicyRefusal() };
+          this.noteRefusal(idx.sessionId, why);
         }
       }
     } catch (e) {
@@ -219,9 +250,10 @@ export class KilogentConnection {
 
   /** The refusal used wherever the policy is unknown. Fails CLOSED, on purpose. */
   unknownPolicyRefusal() {
-    return (
+    return withCode(
+      "blocked",
       "This browser cannot confirm what it is allowed to open right now, so it refused. " +
-      "Try again in a moment; if it keeps happening, ask its owner to reopen the browser."
+        "Try again in a moment; if it keeps happening, ask its owner to reopen the browser.",
     );
   }
 
@@ -443,8 +475,10 @@ export class KilogentConnection {
         ok: false,
         error: {
           code: "paused",
-          message:
+          message: withCode(
+            "paused",
             "The owner has paused all agents on this browser. Nothing was done. Try again after they resume it.",
+          ),
         },
       });
       return;
@@ -477,19 +511,22 @@ export class KilogentConnection {
       // Sampled BEFORE, compared after: a command "succeeded" whose navigation was refused mid-flight
       // must not be reported as success. A click on a blocked link returns `Clicked e41` and leaves
       // the tab exactly where it was, which is indistinguishable from a dead link unless we say so.
-      const blockedBefore = this.blockedCountFor(m.sessionId);
+      const refusedBefore = this.refusalCountFor(m.sessionId);
       const result = await this.executor.execute(m.name, args, m.deadlineMs, m.sessionId);
-      if (this.blockedCountFor(m.sessionId) > blockedBefore) {
+      if (this.refusalCountFor(m.sessionId) > refusedBefore) {
+        // AN ERROR, not a result: whatever core returned, this command ran into a refusal — the
+        // navigation it caused was failed before loading, or the page it left the tab on is not
+        // allowed. Nothing from the refused site was loaded; the tab shows Chrome's "blocked" page.
+        const last = this.refusals.get(m.sessionId)?.last;
         this.send({
           t: "res",
           id: m.id,
           ok: false,
           error: {
-            code: "blocked",
+            code: last?.code || "blocked",
             message:
-              "That went to an address blocked on this browser, so the page was not loaded. " +
-              "You are still on the previous page. Ask its owner, or a captain — you cannot change " +
-              "this yourself.",
+              last?.message ||
+              withCode("blocked", "That went to an address this browser refused, so the page was not loaded."),
           },
         });
         return;

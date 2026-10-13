@@ -367,6 +367,7 @@ async function main() {
     sessionId: "job2",
     timeoutMs: 5000,
   });
+  const whilePausedBody = whilePaused.body;
   ok(
     JSON.stringify(whilePaused.body ?? {}).includes("paused all agents"),
     "a paused browser refuses a command that would otherwise be allowed",
@@ -422,6 +423,15 @@ async function main() {
   ok(
     conn.allowUrl("https://elsewhere.test/", { sessionId: "job2" }) !== true,
     "allowUrl — the check after every action — refuses it too, so a click cannot get there",
+  );
+  ok(
+    JSON.stringify(outside.body ?? {}).includes("[not_allowed]") &&
+      outside.body?.result?.isError === true,
+    "the refusal reaches the agent as an ERROR whose text carries the code Kilogent branches on",
+  );
+  ok(
+    JSON.stringify(whilePausedBody ?? {}).includes("[paused]"),
+    "and so does the pause, with its own code",
   );
   conn.setAllowlist("job2", []);
 
@@ -513,7 +523,7 @@ async function main() {
   // refused, exactly as it is in production.
   clickLandsOn = null;
   clickBlockedBy = "https://bank.test/statement";
-  const blockedBefore = conn.blockedCountFor("job2");
+  const blockedBefore = conn.refusalCountFor("job2");
 
   const afterBlockedNav = await dispatch(port, {
     name: "browser_click",
@@ -530,7 +540,7 @@ async function main() {
   // command starts AFTER job2's block, so even a global counter would sample the same value before
   // and after and refuse nothing. Reading both ledgers is what actually distinguishes the two.
   ok(
-    conn.blockedCountFor("job2") > 0 && conn.blockedCountFor("job1") === 0,
+    conn.refusalCountFor("job2") > 0 && conn.refusalCountFor("job1") === 0,
     "the ledger is per-session — job1 carries none of job2's refusals",
   );
 
