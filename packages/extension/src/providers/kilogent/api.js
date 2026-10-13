@@ -1,182 +1,138 @@
-// Talking to Kilogent Crew: two operations of its browser dispatcher (see `callFunction` in
-// auth.js), and the browser's own row in Firestore.
+// Talking to Kilogent Crew: the operations of its browser dispatcher (see `callFunction` in auth.js).
 //
-// The row is written DIRECTLY by this extension rather than by a callable, and that is the whole
-// security model rather than a shortcut: `firestore.rules` pins `ownerUid` to `request.auth.uid`,
-// so a browser can only ever claim the person who signed in. No amount of bugs here can forge a
-// different owner, because the check is not in this file.
+// ONE RECORD PER BROWSER, OWNED BY THE ACCOUNT, WRITTEN BY THE SERVER. This file used to write a
+// row straight into Firestore on every workspace the browser was offered to, and beat on each one.
+// Since PRFAQ-001 ("Browser in three short steps") a browser belongs to its owner's account, not to
+// a workspace, and Crew creates and updates that one record itself. So every call here is a
+// dispatcher operation, and the extension holds no Firestore code at all.
 //
-// Firestore REST rather than the SDK, for `kilogent-auth.js`'s reason — no build step. The mapping to
-// and from Firestore's typed JSON is small enough to write out, and writing it out is what keeps
-// the extension a directory you can read.
-//
-// THE DATABASE IS NAMED. Crew's data lives in `crew`, never `(default)` — a write to the wrong one
-// silently lands in Support's database and is watched by nothing.
+// THE NAME IS THE ONE THING A PERSON TYPES, and the server is the judge of it: unique per account,
+// trimmed, any letter case. `checkBrowserName` below is only a friendly early answer so the popup
+// can say "that's empty" without a round-trip — the server refuses the same things, and more.
 
-const FIRESTORE = "https://firestore.googleapis.com/v1";
-const DATABASE = "crew";
+/** Longest name the popup accepts. The server has the final say. */
+export const NAME_MAX = 60;
 
-/** Fields the extension maintains on its own row. Must agree with `liveFields()` in the rules —
- *  a field written and not listed there makes `hasOnly()` reject the whole write, so the browser
- *  silently stops beating and shows offline while its socket is up and working. */
-const LIVE_FIELDS = ["label", "agentString", "extensionVersion", "lastSeenAt", "tabCount"];
-
-function docPath(projectId, shipId, browserId) {
-  return `${FIRESTORE}/projects/${projectId}/databases/${DATABASE}/documents/ships/${shipId}/browsers/${browserId}`;
-}
-
-/** JS → Firestore's typed JSON. Integers must go as `integerValue` STRINGS; a number sent as
- *  `doubleValue` fails `is int` in the rules, which reads as a permission bug and is a type bug. */
-function toValue(v) {
-  if (v === null || v === undefined) return { nullValue: null };
-  if (typeof v === "boolean") return { booleanValue: v };
-  if (typeof v === "number") {
-    return Number.isInteger(v) ? { integerValue: String(v) } : { doubleValue: v };
+/**
+ * A friendly client-side check of a browser name, before asking the server.
+ *
+ * @param {string} raw         what the person typed
+ * @param {string[]} [others]  names of this account's OTHER browsers, if the popup knows them
+ * @returns {{ok:true, name:string} | {ok:false, message:string}}
+ */
+export function checkBrowserName(raw, others = []) {
+  // Same normalisation as the server: trimmed, compared without letter case. Nothing stricter —
+  // a name the server would accept must never be refused here, because the person cannot see why.
+  const name = String(raw ?? "").trim();
+  if (!name) return { ok: false, message: "Give this browser a name." };
+  if (name.length > NAME_MAX) {
+    return { ok: false, message: `Keep it to ${NAME_MAX} characters or fewer.` };
   }
-  if (Array.isArray(v)) return { arrayValue: { values: v.map(toValue) } };
-  if (typeof v === "object") {
-    return { mapValue: { fields: Object.fromEntries(Object.entries(v).map(([k, x]) => [k, toValue(x)])) } };
+  const key = name.toLowerCase();
+  if ((others ?? []).some((other) => String(other ?? "").trim().toLowerCase() === key)) {
+    return { ok: false, message: "You already have a browser with this name. Pick another one." };
   }
-  return { stringValue: String(v) };
+  return { ok: true, name };
 }
 
-function fromValue(v) {
-  if (!v || typeof v !== "object") return null;
-  if ("nullValue" in v) return null;
-  if ("booleanValue" in v) return v.booleanValue;
-  if ("integerValue" in v) return Number(v.integerValue);
-  if ("doubleValue" in v) return v.doubleValue;
-  if ("stringValue" in v) return v.stringValue;
-  if ("arrayValue" in v) return (v.arrayValue.values ?? []).map(fromValue);
-  if ("mapValue" in v) return fromFields(v.mapValue.fields ?? {});
-  return null;
+/**
+ * An error from a browser operation, with the server's own code kept.
+ *
+ * Crew puts the machine-readable reason in `details.code` — `name_required`, `name_taken` (with
+ * `details.suggestion`, e.g. "Work Chrome (2)"), `browser_taken`, `browser_not_registered`. The
+ * message is for people and may change, so nothing here branches on it.
+ */
+function withReason(e) {
+  const details = e?.details ?? {};
+  e.code = details.code || "";
+  e.suggestion = details.suggestion || "";
+  return e;
 }
 
-function fromFields(fields) {
-  return Object.fromEntries(Object.entries(fields ?? {}).map(([k, v]) => [k, fromValue(v)]));
-}
-
-async function firestore(url, idToken, init) {
-  const res = await fetch(url, {
-    ...init,
-    headers: { "content-type": "application/json", authorization: `Bearer ${idToken}`, ...(init?.headers ?? {}) },
-  });
-  const body = await res.json().catch(() => null);
-  if (!res.ok) {
-    const err = new Error(body?.error?.message || `Firestore ${res.status}`);
-    err.httpStatus = res.status;
-    // The §15.30 inference, and the reason this is surfaced rather than swallowed: a browser has
-    // no removal event and no field left to read, so the news that it was thrown off a Ship
-    // arrives as a 403 on its own row. Sound ONLY because it is scoped to that one document.
-    err.denied = res.status === 403 || body?.error?.status === "PERMISSION_DENIED";
-    err.missing = res.status === 404;
-    throw err;
-  }
-  return body;
-}
-
-/** Read this browser's row on one Ship. Null when it does not exist yet. */
-export async function getBrowserDoc(idToken, projectId, shipId, browserId) {
+async function op(callFunction, endpoint, name, data, idToken) {
   try {
-    const doc = await firestore(docPath(projectId, shipId, browserId), idToken);
-    return fromFields(doc.fields);
+    return await callFunction(endpoint, name, data, idToken);
   } catch (e) {
-    if (e.missing) return null;
-    throw e;
+    throw withReason(e);
   }
 }
 
-/**
- * Create this browser's row. `shared: false` is not a default that happened — it is the design:
- * a browser that is merely CONNECTED is not a browser agents may drive, and nothing about
- * installing an extension should imply otherwise.
- *
- * `createDocument` rather than a PATCH, because the rules genuinely distinguish the two and the
- * create branch is the one that pins `ownerUid`. It fails with 409 if the row already exists,
- * which is the right answer — the caller updates instead.
- */
-export async function createBrowserDoc(idToken, projectId, shipId, browserId, identity, ownerUid) {
-  const parent = `${FIRESTORE}/projects/${projectId}/databases/${DATABASE}/documents/ships/${shipId}/browsers`;
-  const fields = {
-    ownerUid: toValue(ownerUid),
-    label: toValue(identity.label),
-    shared: toValue(false),
-    lastSeenAt: toValue(Date.now()),
-    createdAt: toValue(Date.now()),
-    ...(identity.agentString ? { agentString: toValue(identity.agentString.slice(0, 400)) } : {}),
-    ...(identity.extensionVersion ? { extensionVersion: toValue(identity.extensionVersion) } : {}),
-  };
-  return firestore(`${parent}?documentId=${encodeURIComponent(browserId)}`, idToken, {
-    method: "POST",
-    body: JSON.stringify({ fields }),
-  });
+/** A suggested name from the device, e.g. "Chrome on MacBook". Null if the server has none. */
+export async function suggestBrowserName(callFunction, endpoint, idToken, agentString) {
+  const result = await op(callFunction, endpoint, "suggestBrowserName", { agentString }, idToken);
+  return typeof result?.name === "string" && result.name ? result.name : null;
 }
 
 /**
- * The heartbeat. PRESENCE IS AN ABSENCE on the other side — a browser that is killed, slept or
- * closed cannot write "offline", so the staleness of this timestamp IS the signal, and Crew reads
- * anything older than 90 seconds as gone.
+ * Create (or claim again) this browser's account-level record, with its name.
  *
- * The update mask names only `liveFields()`, so a heartbeat can never carry a sharing field by
- * accident — which is the reason the rules keep those two lists apart.
+ * Idempotent on `browserId`: an existing install calling it again with the same name is a no-op on
+ * the server, which is what lets an update re-register without a special path.
  */
-export async function heartbeat(idToken, projectId, shipId, browserId, live) {
-  const fields = {};
-  const mask = [];
-  for (const key of LIVE_FIELDS) {
-    if (live[key] === undefined) continue;
-    fields[key] = toValue(live[key]);
-    mask.push(`updateMask.fieldPaths=${key}`);
-  }
-  if (mask.length === 0) return null;
-  return firestore(`${docPath(projectId, shipId, browserId)}?${mask.join("&")}`, idToken, {
-    method: "PATCH",
-    body: JSON.stringify({ fields }),
-  });
+export async function registerBrowser(callFunction, endpoint, idToken, identity) {
+  return op(
+    callFunction,
+    endpoint,
+    "registerBrowser",
+    {
+      browserId: identity.browserId,
+      name: identity.name,
+      agentString: (identity.agentString || "").slice(0, 400),
+      extensionVersion: identity.extensionVersion || "",
+    },
+    idToken,
+  );
 }
 
-/** Which workspaces may this person lend their browser to? Filtered server-side by membership. */
-export async function listMyShips(callFunction, endpoint, idToken) {
-  const result = await callFunction(endpoint, "listMyShipsForBrowser", {}, idToken);
-  return Array.isArray(result?.ships) ? result.ships : [];
+export async function renameBrowser(callFunction, endpoint, idToken, browserId, name) {
+  return op(callFunction, endpoint, "renameBrowser", { browserId, name }, idToken);
+}
+
+/**
+ * The heartbeat — ONE per browser, not one per workspace.
+ *
+ * PRESENCE IS AN ABSENCE on the other side: a browser that is killed, slept or closed cannot say
+ * "offline", so the staleness of the last beat IS the signal.
+ *
+ * The answer is the server's view: `{registered, name, paused, needsRename}`. It is how a rename
+ * or a pause done on My browsers reaches this popup, and `registered: false` is how a browser
+ * removed there learns it must be named again.
+ */
+export async function browserHeartbeat(callFunction, endpoint, idToken, beat) {
+  return op(
+    callFunction,
+    endpoint,
+    "browserHeartbeat",
+    {
+      browserId: beat.browserId,
+      tabCount: beat.tabCount ?? 0,
+      extensionVersion: beat.extensionVersion || "",
+    },
+    idToken,
+  );
+}
+
+export async function setBrowserPaused(callFunction, endpoint, idToken, browserId, paused) {
+  return op(callFunction, endpoint, "setBrowserPaused", { browserId, paused: !!paused }, idToken);
+}
+
+/**
+ * Say "signed out" before the session is dropped, so My browsers can tell it apart from plain
+ * offline. Only stamps the record; the next heartbeat or registration clears it. BEST EFFORT —
+ * sign-out never waits on it succeeding.
+ */
+export async function signOutBrowser(callFunction, endpoint, idToken, browserId) {
+  return op(callFunction, endpoint, "signOutBrowser", { browserId }, idToken);
 }
 
 /**
  * A ticket for ONE socket.
  *
- * Ship-agnostic on purpose: a browser is a MACHINE serving every Ship its owner belongs to over
- * one connection, so there is no shipId to send. Whether an agent may drive it is decided per
- * call, from live documents, by Crew — never here.
+ * Workspace-agnostic on purpose: a browser is a MACHINE serving its owner over one connection.
+ * Whether an agent may drive it is decided per call, from the browser's links, by Crew — never here.
  */
 export async function mintTicket(callFunction, endpoint, idToken, browserId) {
   const result = await callFunction(endpoint, "mintBrowserRelayTicket", { browserId }, idToken);
   if (!result?.ticket || !result?.relayUrl) throw new Error("Kilogent did not return a relay ticket.");
   return { ticket: result.ticket, relayUrl: result.relayUrl };
-}
-
-/**
- * Make sure this browser has a row on each chosen Ship, and beat on the ones it has.
- *
- * A DENIAL IS NOT AN ERROR HERE, it is the removal signal (§15.30): the Ship dropped this browser,
- * or dropped this person, and the answer is to stop offering it there while leaving every other
- * Ship alone. Returned rather than thrown so one revoked Ship cannot take down the heartbeat for
- * the rest — which is exactly the bug that made a temporary revocation permanent for daemons.
- */
-export async function syncShips(idToken, projectId, shipIds, browserId, identity, ownerUid, live) {
-  const removed = [];
-  const failed = [];
-  for (const shipId of shipIds) {
-    try {
-      const existing = await getBrowserDoc(idToken, projectId, shipId, browserId);
-      if (!existing) {
-        await createBrowserDoc(idToken, projectId, shipId, browserId, identity, ownerUid);
-        continue;
-      }
-      await heartbeat(idToken, projectId, shipId, browserId, live);
-    } catch (e) {
-      if (e.denied) removed.push(shipId);
-      else failed.push({ shipId, message: String(e.message || e) });
-    }
-  }
-  return { removed, failed };
 }

@@ -1,7 +1,8 @@
 // The `kilogent` transport — a hosted service, and the worked example of a second one.
 //
 // One socket to Kilogent's relay, authenticated by a short-lived ticket the service mints per
-// connection, serving every workspace this person lends the browser to. It sits beside the
+// connection. The browser is ONE account-level record with a name (PRFAQ-001): which agents may
+// use it is decided in Kilogent, per link, never here. It sits beside the
 // self-hosted `bridge` transport rather than replacing it: both can be live at once, and neither
 // knows the other exists.
 //
@@ -24,10 +25,30 @@ import {
   loadSession,
   clearSession,
 } from "./auth.js";
-import { mintTicket, syncShips } from "./api.js";
-import { effectiveBlocklist, isBlocked } from "./blocklist.js";
+import {
+  mintTicket,
+  registerBrowser,
+  renameBrowser,
+  suggestBrowserName,
+  browserHeartbeat,
+  setBrowserPaused,
+  signOutBrowser,
+} from "./api.js";
+import { effectiveBlocklist, isAllowed, isBlocked } from "./blocklist.js";
+
+/** The contract's heartbeat period. A browser counts as online for 90 s after its last beat. */
+const HEARTBEAT_MS = 30_000;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** The Kilogent web app's origin, from the sign-in page it sent us to. */
+function appOriginOf(url) {
+  try {
+    return url ? new URL(url).origin : "";
+  } catch {
+    return "";
+  }
+}
 
 /** The popup messages only this transport can answer. `getStatus` and `reconnect` are NOT here —
  *  see the file header. */
@@ -35,7 +56,8 @@ const MINE = new Set([
   "beginLogin",
   "cancelLogin",
   "setSession",
-  "setShips",
+  "setName",
+  "setPaused",
   "setBlocklist",
   "signOut",
 ]);
@@ -62,9 +84,17 @@ export function createKilogentTransport(deps) {
    * on a hot path.
    */
   let ownBlocklistCache = [];
-  /** Workspace ids this browser is offered to. Mirrored so the heartbeat need not re-read storage. */
-  let ships = [];
+  /**
+   * PAUSE ALL AGENTS, mirrored from storage so the command path can ask synchronously. Read by
+   * `KilogentConnection.handleCmd` before every command — a paused browser refuses locally, whether
+   * or not the server has heard.
+   */
+  let paused = false;
+  /** The browser's own record, as the popup needs it. See `refreshBrowserState`. */
+  let browser = { name: "", registered: false, needsName: false, needsRename: false, paused: false };
   let lastError = "";
+  /** The 30 s heartbeat, alive exactly while the socket is. */
+  let beatTimer = null;
   /**
    * The public half of the session, cached.
    *
@@ -95,6 +125,7 @@ export function createKilogentTransport(deps) {
     const store = await storage.get([KEYS.label, KEYS.endpoint]);
     return {
       browserId: await browserId(),
+      name: store[KEYS.label] || "",
       label: store[KEYS.label] || "This browser",
       agentString: (deps.userAgent || "").slice(0, 400),
       extensionVersion: deps.extensionVersion || "",
@@ -105,6 +136,8 @@ export function createKilogentTransport(deps) {
   function teardown() {
     kilogent?.teardown();
     kilogent = null;
+    if (beatTimer) clearInterval(beatTimer);
+    beatTimer = null;
   }
 
   /**
@@ -181,11 +214,18 @@ export function createKilogentTransport(deps) {
             email: result.email ?? "",
             apiKey: result.apiKey,
             projectId: result.projectId,
+            // Signed in with names required. An install without this mark is an UPDATE of an
+            // older version; see `adoptLegacyName`.
+            flow: 2,
           },
           [KEYS.schema]: SCHEMA_VERSION,
-          [KEYS.label]: pending.label,
+          ...(appOriginOf(pending.verificationUrl)
+            ? { [KEYS.appOrigin]: appOriginOf(pending.verificationUrl) }
+            : {}),
         });
-        await storage.remove(KEYS.pending);
+        // A NEW SIGN-IN NAMES THE BROWSER AGAIN. Whatever was accepted before belonged to whichever
+        // account was signed in then; the popup asks for a name for this one, prefilled.
+        await storage.remove([KEYS.pending, KEYS.registered, KEYS.ships]);
         lastError = "";
         await reconcile();
         return;
@@ -205,38 +245,156 @@ export function createKilogentTransport(deps) {
   }
 
   /**
-   * Write the row on every workspace this browser is offered to.
-   *
-   * A DENIED workspace is dropped from the list rather than retried, and rather than being allowed
-   * to fail the whole beat. A browser has no removal event, so a 403 on its own row IS the news
-   * that it was thrown off. Scoping the reaction to that one workspace is what stops a single
-   * revocation taking this browser off the others — the exact bug that once made a temporary
-   * revocation permanent.
+   * The server's last word on this browser, as cached in storage — or null when that word was for
+   * another account, another endpoint or another browserId. Used ONLY when the server cannot be
+   * asked right now: a network blip must not drop a working socket.
    */
-  async function beat(idToken, session, id) {
-    if (ships.length === 0) return;
-    const live = {
-      label: id.label,
-      agentString: id.agentString,
-      extensionVersion: id.extensionVersion,
-      lastSeenAt: Date.now(),
-      tabCount: kilogent ? kilogent.statusSnapshot().tabCount : 0,
+  function cachedRecord(reg, session, id) {
+    const ok =
+      !!reg &&
+      reg.uid === session.uid &&
+      reg.browserId === id.browserId &&
+      (reg.endpoint || "") === (id.endpoint || "") &&
+      !!reg.name;
+    return ok ? reg : null;
+  }
+
+  /** Recompute what the popup shows about this browser, from storage. */
+  async function refreshBrowserState(session, id) {
+    const store = await storage.get([KEYS.registered, KEYS.paused]);
+    paused = store[KEYS.paused] === true;
+    const reg = session ? cachedRecord(store[KEYS.registered], session, id) : null;
+    browser = {
+      name: reg?.name || "",
+      registered: !!reg,
+      // BLOCKING: no record on this account, so no socket until the popup names it.
+      needsName: !!session && !reg,
+      // A NUDGE: the record exists and works, but its name was made up for it (migration suffix,
+      // or a fallback). The popup asks for a better one; nothing waits for the answer.
+      needsRename: !!reg?.needsRename,
+      paused,
     };
-    const { removed, failed } = await syncShips(
-      idToken,
-      session.projectId,
-      ships,
-      id.browserId,
-      id,
-      session.uid,
-      live,
-    );
-    if (removed.length) {
-      ships = ships.filter((s) => !removed.includes(s));
-      await storage.set({ [KEYS.ships]: ships });
-      lastError = `Removed from ${removed.length} workspace${removed.length === 1 ? "" : "s"}.`;
+  }
+
+  /** Cache the server's view of this browser's record. */
+  async function remember(session, id, name, needsRename) {
+    await storage.set({
+      [KEYS.label]: name,
+      [KEYS.registered]: {
+        uid: session.uid,
+        browserId: id.browserId,
+        endpoint: id.endpoint || "",
+        name,
+        needsRename: !!needsRename,
+      },
+    });
+  }
+
+  /** A browserId another account already owns: mint a fresh one, as the contract asks. */
+  async function freshBrowserId() {
+    teardown(); // a socket, if any, was for the old id
+    await storage.remove([KEYS.browserId, KEYS.registered]);
+    return identity();
+  }
+
+  /**
+   * Register, retrying ONCE with a fresh browserId if this one belongs to another account (a
+   * profile copied between people, or a reused test profile).
+   */
+  async function registerWithRetry(idToken, id, name) {
+    try {
+      await registerBrowser(callFunction, id.endpoint, idToken, { ...id, name });
+      return id;
+    } catch (e) {
+      if (e?.code !== "browser_taken") throw e;
+      const fresh = await freshBrowserId();
+      await registerBrowser(callFunction, fresh.endpoint, idToken, { ...fresh, name });
+      return fresh;
     }
-    if (failed.length) lastError = failed[0].message;
+  }
+
+  /**
+   * AN EXISTING INSTALL, UPDATED, that the server's migration never saw (it was created after the
+   * migration ran). It must KEEP WORKING, so it is never sent to a blocking name step: it registers
+   * its old name, or the server's suggestion when that is missing or taken, and the popup then
+   * nudges for a better name.
+   *
+   * "This browser" was the old default when nobody typed anything, so it does not count as a name.
+   */
+  async function adoptLegacyName(idToken, session, id) {
+    const legacy = id.name && id.name !== "This browser" ? id.name : "";
+    let name = legacy;
+    try {
+      if (!name) name = (await suggestBrowserName(callFunction, id.endpoint, idToken, id.agentString)) || "Chrome";
+      let used = id;
+      try {
+        used = await registerWithRetry(idToken, id, name);
+      } catch (e) {
+        if (e?.code !== "name_taken" || !e.suggestion) throw e;
+        name = e.suggestion;
+        used = await registerWithRetry(idToken, id, name);
+      }
+      await remember(session, used, name, name !== legacy);
+      return true;
+    } catch (e) {
+      lastError = String(e?.message || e);
+      return false;
+    }
+  }
+
+  /** When the last heartbeat went out, so the alarm and the 30 s timer do not double up. */
+  let lastBeat = { at: 0, state: "unknown" };
+
+  /**
+   * ONE heartbeat for this browser — there used to be one per workspace it was offered to.
+   * Answers "registered" | "unregistered" | "unknown" (the server could not be asked).
+   *
+   * Also where the pause CONVERGES. A local change is pushed with `setBrowserPaused` and marked
+   * dirty until the server acknowledges it; with nothing dirty, the server's answer wins, which is
+   * how "Turn off all" on My browsers reaches this switch.
+   */
+  async function beat(idToken, session, id, { force = false } = {}) {
+    if (!force && Date.now() - lastBeat.at < HEARTBEAT_MS - 5000) return lastBeat.state;
+    const store = await storage.get([KEYS.registered, KEYS.pauseDirty]);
+
+    if (store[KEYS.pauseDirty] && cachedRecord(store[KEYS.registered], session, id)) {
+      try {
+        await setBrowserPaused(callFunction, id.endpoint, idToken, id.browserId, paused);
+        await storage.remove(KEYS.pauseDirty);
+      } catch (e) {
+        lastError = `Paused here, but Kilogent has not heard yet: ${e?.message || e}`;
+      }
+    }
+
+    let answer;
+    try {
+      answer = await browserHeartbeat(callFunction, id.endpoint, idToken, {
+        browserId: id.browserId,
+        tabCount: kilogent ? kilogent.statusSnapshot().tabCount : 0,
+        extensionVersion: id.extensionVersion,
+      });
+    } catch (e) {
+      if (e?.code === "browser_not_registered") answer = { registered: false };
+      else {
+        lastError = String(e?.message || e);
+        return (lastBeat = { at: Date.now(), state: "unknown" }).state;
+      }
+    }
+
+    if (!answer?.registered) {
+      // Never named on this account, or removed on My browsers.
+      await storage.remove(KEYS.registered);
+      return (lastBeat = { at: Date.now(), state: "unregistered" }).state;
+    }
+    const cached = cachedRecord(store[KEYS.registered], session, id);
+    await remember(session, id, answer.name || cached?.name || id.name, answer.needsRename);
+    const stillDirty = (await storage.get(KEYS.pauseDirty))[KEYS.pauseDirty];
+    if (!stillDirty && typeof answer.paused === "boolean" && answer.paused !== paused) {
+      paused = answer.paused;
+      await storage.set({ [KEYS.paused]: paused });
+    }
+    lastError = "";
+    return (lastBeat = { at: Date.now(), state: "registered" }).state;
   }
 
   /**
@@ -260,8 +418,9 @@ export function createKilogentTransport(deps) {
       return;
     }
 
-    const store = await storage.get(KEYS.ships);
-    ships = Array.isArray(store[KEYS.ships]) ? store[KEYS.ships] : [];
+    // The workspace list from before PRFAQ-001. Nothing reads it any more.
+    await storage.remove(KEYS.ships);
+    await refreshBrowserState(session, id);
 
     // Refreshes if it is within five minutes of expiry, and returns null only when the session is
     // genuinely dead — a transient failure keeps the old token, because signing somebody out
@@ -273,6 +432,19 @@ export function createKilogentTransport(deps) {
       },
     });
     if (!idToken) {
+      teardown();
+      return;
+    }
+
+    let state = await beat(idToken, session, id);
+    if (state === "unregistered" && session.flow !== 2) {
+      // An updated old install the migration did not cover. It keeps working — see adoptLegacyName.
+      if (await adoptLegacyName(idToken, session, id)) state = await beat(idToken, session, await identity(), { force: true });
+    }
+    const cached = cachedRecord((await storage.get(KEYS.registered))[KEYS.registered], session, id);
+    await refreshBrowserState(session, await identity());
+    if (state === "unregistered" || (state === "unknown" && !cached)) {
+      // NO RECORD, NO SOCKET (the contract). The popup asks for a name; `setName` comes back here.
       teardown();
       return;
     }
@@ -301,17 +473,77 @@ export function createKilogentTransport(deps) {
         // the next worker eviction, and the relay does not re-send it because its session is still
         // open. See `restoreSessions`.
         storage,
+        // PAUSE ALL AGENTS, enforced here as well as on the server. Read per command, so the
+        // switch takes effect on the very next one.
+        isPaused: () => paused,
         ownBlocklist: () => ownBlocklistCache,
         effectiveBlocklist,
         isBlocked,
+        isAllowed,
         onStateChange: () => {},
         log,
       });
       kilogent.connect();
     }
 
+    // ONE heartbeat every 30 s while the socket is up. The alarm alone is once a minute, and the
+    // server reads a browser as offline 90 s after its last beat — too close for one missed alarm.
+    beatTimer ??= setInterval(() => void reconcile().catch(() => {}), HEARTBEAT_MS);
+
     await refreshOwnBlocklist();
-    await beat(idToken, session, id);
+  }
+
+  /**
+   * Name (or rename) this browser. Answers `{ok, name}` or `{ok:false, code, suggestion, message}`
+   * so the popup can show the server's own refusal with its suggestion.
+   */
+  async function setName(raw) {
+    const name = String(raw ?? "").trim();
+    const session = await loadSession(storage);
+    const idToken = session ? await getIdToken(storage) : null;
+    if (!idToken) return { ok: false, code: "", suggestion: "", message: "Signed out." };
+    let id = await identity();
+    const cached = cachedRecord((await storage.get(KEYS.registered))[KEYS.registered], session, id);
+    try {
+      if (cached) await renameBrowser(callFunction, id.endpoint, idToken, id.browserId, name);
+      else id = await registerWithRetry(idToken, id, name);
+    } catch (e) {
+      return {
+        ok: false,
+        code: e?.code || "",
+        suggestion: e?.suggestion || "",
+        message: String(e?.message || e),
+      };
+    }
+    await remember(session, id, name, false);
+    lastError = "";
+    await reconcile(); // opens the socket if this was the first name
+    return { ok: true, name };
+  }
+
+  /** Best effort, bounded: sign-out must not hang on a slow or unreachable server. */
+  async function tellServerSignedOut() {
+    try {
+      const idToken = await getIdToken(storage);
+      if (!idToken) return;
+      const id = await identity();
+      await Promise.race([
+        signOutBrowser(callFunction, id.endpoint, idToken, id.browserId),
+        sleep(3000),
+      ]);
+    } catch {
+      /* shows as offline instead of signed out — acceptable */
+    }
+  }
+
+  /** PAUSE ALL AGENTS. Local first — it holds even if the server call below fails. */
+  async function setPausedLocal(next) {
+    paused = !!next;
+    await storage.set({ [KEYS.paused]: paused, [KEYS.pauseDirty]: true });
+    browser = { ...browser, paused };
+    // Best effort now; `beat` keeps retrying while it is dirty.
+    void reconcile().catch(() => {});
+    return { ok: true, paused };
   }
 
   return {
@@ -350,7 +582,7 @@ export function createKilogentTransport(deps) {
       return {
         kilogent: kilogent ? kilogent.statusSnapshot() : null,
         session: publicSession,
-        ships,
+        browser,
         lastError,
       };
     },
@@ -377,22 +609,18 @@ export function createKilogentTransport(deps) {
           .then(reconcile)
           .then(() => ({ ok: true }));
       }
-      if (msg.type === "setShips") {
-        ships = Array.isArray(msg.ships) ? msg.ships : [];
-        return storage
-          .set({ [KEYS.ships]: ships })
-          .then(reconcile)
-          .then(() => ({ ok: true }));
-      }
+      if (msg.type === "setName") return setName(msg.name);
+      if (msg.type === "setPaused") return setPausedLocal(msg.paused);
       if (msg.type === "setBlocklist") {
         return storage
           .set({ [KEYS.blocklist]: msg.blocklist ?? [] })
           .then(() => ({ ok: true }));
       }
-      // signOut
-      return clearSession(storage).then(() => {
-        ships = [];
+      // signOut — ONLY disconnects (the founder's call): the record and its links stay, and
+      // signing in again brings the browser back. Removing it is a deliberate act on My browsers.
+      return tellServerSignedOut().then(() => clearSession(storage)).then(() => {
         publicSession = null;
+        browser = { ...browser, name: "", registered: false, needsName: false, needsRename: false };
         teardown();
         return { ok: true };
       });

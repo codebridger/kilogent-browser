@@ -69,6 +69,9 @@ export async function callFunction(endpoint, op, data, idToken) {
     const err = new Error(body?.error?.message || `${op} failed (HTTP ${res.status})`);
     err.status = body?.error?.status || "";
     err.httpStatus = res.status;
+    // The operation's own reason (`name_taken`, `paused`, …) and anything it attached, such as a
+    // suggested name. A status alone cannot tell "that name is taken" from "you are signed out".
+    err.details = body?.error?.details ?? null;
     throw err;
   }
   return body?.result;
@@ -175,7 +178,7 @@ export async function saveSession(storage, session) {
 }
 
 export async function clearSession(storage) {
-  await storage.remove([KEYS.session, KEYS.ships]);
+  await storage.remove([KEYS.session, KEYS.ships, KEYS.registered]);
 }
 
 /**

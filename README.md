@@ -23,11 +23,11 @@ Everything Kilogent-specific lives in **one directory**, `packages/extension/src
 | File | What it does |
 |---|---|
 | `index.js` | the transport itself — what upstream's registry calls |
-| `popup.js` | the panel — sign-in, workspaces, blocklist |
+| `popup.js` | the panel — sign in, name the browser, its status, Pause all agents, blocklist |
 | `auth.js` | signing in, and keeping the session alive |
 | `connection.js` | the socket to Kilogent's relay |
-| `api.js` | the browser's own row, written under rules |
-| `blocklist.js` | the second of the two blocklist levels |
+| `api.js` | Kilogent's browser operations — register, rename, heartbeat, pause |
+| `blocklist.js` | the second of the two blocklist levels, and a link's allow list |
 | `config.js` | the one URL compiled in, and the storage keys |
 
 **The rule that keeps this fork alive: never edit the core.** `executor.js`, `page-scripts.js`,

@@ -34,10 +34,19 @@ import { mintRelayTicket } from "../packages/relay/dist/providers/ticket/ticket.
 import { resolveAuthProvider } from "../packages/relay/dist/providers/index.js";
 import { Executor } from "../packages/extension/src/executor.js";
 import { KilogentConnection } from "../packages/extension/src/providers/kilogent/connection.js";
-import { effectiveBlocklist, isBlocked } from "../packages/extension/src/providers/kilogent/blocklist.js";
+import {
+  effectiveBlocklist,
+  isAllowed,
+  isBlocked,
+} from "../packages/extension/src/providers/kilogent/blocklist.js";
 import { callFunction, startLogin } from "../packages/extension/src/providers/kilogent/auth.js";
 import {
-  listMyShips,
+  suggestBrowserName,
+  registerBrowser,
+  renameBrowser,
+  browserHeartbeat,
+  setBrowserPaused,
+  signOutBrowser,
   // Renamed on import: `main()` has its own `mintTicket`, the relay-side stand-in used above.
   mintTicket as mintTicketFromCrew,
 } from "../packages/extension/src/providers/kilogent/api.js";
@@ -230,6 +239,7 @@ async function main() {
   };
 
   let ownBlocklist = [];
+  let paused = false;
   const conn = (connRef = new KilogentConnection(
     {
       browserId: BROWSER_ID,
@@ -251,13 +261,19 @@ async function main() {
       // A REAL in-memory storage, not a no-op: the session policy is persisted now, and a stub that
       // swallowed writes would hide the very bug this exists to prevent — a restart losing the list.
       storage: {
-        get: async (key) => (key in fakeStore ? { [key]: fakeStore[key] } : {}),
+        // chrome.storage takes one key OR an array of keys; restore asks for two at once.
+        get: async (keys) =>
+          Object.fromEntries(
+            [keys].flat().filter((k) => k in fakeStore).map((k) => [k, fakeStore[k]]),
+          ),
         set: async (obj) => void Object.assign(fakeStore, obj),
         remove: async (key) => void delete fakeStore[key],
       },
       ownBlocklist: () => ownBlocklist,
       effectiveBlocklist,
       isBlocked,
+      isAllowed,
+      isPaused: () => paused,
       log: () => {},
     },
   ));
@@ -340,6 +356,74 @@ async function main() {
     !JSON.stringify(lookalike.body ?? {}).includes("blocked"),
     "a LOOK-ALIKE host is not the blocked origin — matching is anchored, not a prefix",
   );
+
+  // ── Pause all agents, refused BY THE EXTENSION ───────────────────────────────────────────────
+  // The server refuses too, on every dispatch. This is the half that holds when it has not heard.
+  console.log("-- pause all agents --");
+  paused = true;
+  const whilePaused = await dispatch(port, {
+    name: "browser_navigate",
+    args: { url: "https://ok.test/" },
+    sessionId: "job2",
+    timeoutMs: 5000,
+  });
+  ok(
+    JSON.stringify(whilePaused.body ?? {}).includes("paused all agents"),
+    "a paused browser refuses a command that would otherwise be allowed",
+  );
+  paused = false;
+  const resumed = await dispatch(port, {
+    name: "browser_navigate",
+    args: { url: "https://ok.test/" },
+    sessionId: "job2",
+    timeoutMs: 5000,
+  });
+  ok(resumed.body?.result?.isError !== true, "and resuming lets the next command through");
+
+  // ── the allow list: a link's named sites ──────────────────────────────────────────────────────
+  // Set on the connection directly: the relay in this tree does not carry `allowedOrigins` until
+  // the upstream change is merged. What is tested is the extension's half.
+  console.log("-- allow list --");
+  ok(isAllowed("https://www.vinted.com/x", ["vinted.com"]), "a subdomain of an allowed host is allowed");
+  ok(isAllowed("http://vinted.com/", ["https://vinted.com"]), "on http as well as https");
+  ok(!isAllowed("https://vinted.com.evil.test/", ["vinted.com"]), "a look-alike suffix is not");
+  ok(!isAllowed("https://notvinted.com/", ["vinted.com"]), "nor a host that merely ends in the name");
+  ok(isAllowed("https://any.test/", []) && isAllowed("https://any.test/", undefined), "empty or absent allows any site");
+  ok(!isAllowed("javascript:alert(1)", []), "a URL with no origin fails closed even with no list");
+
+  conn.setAllowlist("job2", ["ok.test", "bank.test"]);
+  const inside = await dispatch(port, {
+    name: "browser_navigate",
+    args: { url: "https://www.ok.test/" },
+    sessionId: "job2",
+    timeoutMs: 5000,
+  });
+  ok(!JSON.stringify(inside.body ?? {}).includes("not one this agent"), "a named site loads");
+  const outside = await dispatch(port, {
+    name: "browser_navigate",
+    args: { url: "https://elsewhere.test/" },
+    sessionId: "job2",
+    timeoutMs: 5000,
+  });
+  ok(
+    JSON.stringify(outside.body ?? {}).includes("not one this agent"),
+    "a site the link does not name is refused",
+  );
+  const bothLists = await dispatch(port, {
+    name: "browser_navigate",
+    args: { url: "https://bank.test/" },
+    sessionId: "job2",
+    timeoutMs: 5000,
+  });
+  ok(
+    JSON.stringify(bothLists.body ?? {}).includes("blocked on this browser"),
+    "the blocklist wins over the allow list",
+  );
+  ok(
+    conn.allowUrl("https://elsewhere.test/", { sessionId: "job2" }) !== true,
+    "allowUrl — the check after every action — refuses it too, so a click cannot get there",
+  );
+  conn.setAllowlist("job2", []);
 
   // ── the gap: a click, which names no URL ──────────────────────────────────────────────────────
   //
@@ -466,7 +550,11 @@ async function main() {
         makeExecutor: (pushStatus, label) => new Executor(pushStatus, label),
         mintTicket: async () => ({ ticket: "x", relayUrl: "ws://127.0.0.1:1" }),
         storage: {
-          get: async (key) => (key in fakeStore ? { [key]: fakeStore[key] } : {}),
+          // chrome.storage takes one key OR an array of keys; restore asks for two at once.
+        get: async (keys) =>
+          Object.fromEntries(
+            [keys].flat().filter((k) => k in fakeStore).map((k) => [k, fakeStore[k]]),
+          ),
           set: async (obj) => void Object.assign(fakeStore, obj),
           remove: async (key) => void delete fakeStore[key],
         },
@@ -578,7 +666,12 @@ async function main() {
       interval: 5,
     },
     pollBrowserLogin: { status: "pending" },
-    listMyShipsForBrowser: { ships: [{ shipId: "ship_a", name: "A" }] },
+    suggestBrowserName: { name: "Chrome on Mac" },
+    registerBrowser: "NAME_TAKEN",
+    renameBrowser: { browser: { browserId: "brw_x", name: "Work Chrome" } },
+    browserHeartbeat: { registered: true, name: "Work Chrome", paused: false, needsRename: false },
+    setBrowserPaused: { paused: true },
+    signOutBrowser: { ok: true },
     mintBrowserRelayTicket: { ticket: "ticket_x", relayUrl: "wss://relay.test/ws", expiresInMs: 600_000 },
   };
   const crew = createServer((req, res) => {
@@ -601,6 +694,20 @@ async function main() {
       if (typeof op !== "string" || !Object.hasOwn(CANNED, op)) {
         res.writeHead(404, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: { message: `Unknown operation: ${op}`, status: "NOT_FOUND" } }));
+        return;
+      }
+      if (CANNED[op] === "NAME_TAKEN") {
+        // The real callable error shape: the machine reason is in details.code, never the message.
+        res.writeHead(409, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error: {
+              status: "ALREADY_EXISTS",
+              message: "You already have a browser with that name.",
+              details: { code: "name_taken", suggestion: "Work Chrome (2)" },
+            },
+          }),
+        );
         return;
       }
       res.writeHead(200, { "content-type": "application/json" });
@@ -640,13 +747,52 @@ async function main() {
     "the worker's poll goes through the dispatcher too",
   );
 
-  const ships = await listMyShips(callFunction, crewBase, "id_token_1");
+  const suggested = await suggestBrowserName(callFunction, crewBase, "id_token_1", "Mozilla/5.0 (Macintosh)");
   ok(
-    ships.length === 1 &&
-      sent("listMyShipsForBrowser", {}) &&
+    suggested === "Chrome on Mac" &&
+      sent("suggestBrowserName", { agentString: "Mozilla/5.0 (Macintosh)" }) &&
       lastCall()?.authorization === "Bearer id_token_1",
-    "the workspace list is an authenticated dispatcher call",
+    "a name is suggested by an authenticated dispatcher call",
   );
+
+  let taken = null;
+  try {
+    await registerBrowser(callFunction, crewBase, "id_token_1", {
+      browserId: "brw_x",
+      name: "Work Chrome",
+      agentString: "UA",
+      extensionVersion: "0.3.0",
+    });
+  } catch (e) {
+    taken = e;
+  }
+  ok(
+    sent("registerBrowser", { browserId: "brw_x", name: "Work Chrome", agentString: "UA", extensionVersion: "0.3.0" }),
+    "registration sends the browser id, the name and the version",
+  );
+  ok(
+    taken?.code === "name_taken" && taken?.suggestion === "Work Chrome (2)",
+    "a taken name surfaces details.code and the server's suggestion",
+  );
+
+  await renameBrowser(callFunction, crewBase, "id_token_1", "brw_x", "Work Chrome");
+  ok(sent("renameBrowser", { browserId: "brw_x", name: "Work Chrome" }), "rename names the browser and the name");
+
+  const beat = await browserHeartbeat(callFunction, crewBase, "id_token_1", {
+    browserId: "brw_x",
+    tabCount: 2,
+    extensionVersion: "0.3.0",
+  });
+  ok(
+    beat?.registered === true && sent("browserHeartbeat", { browserId: "brw_x", tabCount: 2, extensionVersion: "0.3.0" }),
+    "ONE heartbeat per browser, through the dispatcher — no per-workspace Firestore rows",
+  );
+
+  await setBrowserPaused(callFunction, crewBase, "id_token_1", "brw_x", true);
+  ok(sent("setBrowserPaused", { browserId: "brw_x", paused: true }), "the pause is told to the server");
+
+  await signOutBrowser(callFunction, crewBase, "id_token_1", "brw_x");
+  ok(sent("signOutBrowser", { browserId: "brw_x" }), "sign-out is told to the server before the session goes");
 
   const minted = await mintTicketFromCrew(callFunction, crewBase, "id_token_1", "brw_x");
   ok(
@@ -665,7 +811,9 @@ async function main() {
     "an operation Crew does not have surfaces Crew's own words, not a bare HTTP status",
   );
   ok(
-    calls.length > 1 && calls.slice(1).every((c) => c.path === "/crewBrowsers"),
+    calls.length > 1 &&
+      calls.slice(1).every((c) => c.path === "/crewBrowsers") &&
+      !calls.some((c) => /firestore/.test(c.path)),
     "apart from the stand-in's own probe, nothing was sent to any other URL",
   );
   await new Promise((resolve) => crew.close(resolve));
